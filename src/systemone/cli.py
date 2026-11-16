@@ -18,9 +18,7 @@ from systemone.questions import QUESTION_TYPES, validate_questions, validate_sta
 from systemone.server import DEFAULT_HOST, DEFAULT_PORT, DecisionServer
 
 DEFAULT_URL = "http://127.0.0.1:18100"
-_NO_WEIGHTS = (
-    "real weights are not bundled, use --mock, or set SYSTEMONE_MODEL=1 in a future release"
-)
+_NO_WEIGHTS = "real weights are not bundled; this build requires --mock"
 
 
 class _OrderedFlag(argparse.Action):
