@@ -55,18 +55,23 @@ class VersionTests(unittest.TestCase):
 
 
 class ServeTests(unittest.TestCase):
-    def test_without_mock_exits_2_even_if_model_flag_is_set(self):
-        result = _run(["serve"], env=_env(SYSTEMONE_MODEL="1"))
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("real weights are not bundled", result.stderr)
-        self.assertIn("--mock", result.stderr)
-        self.assertIn("SYSTEMONE_MODEL=1", result.stderr)
-        self.assertNotIn("import torch", result.stderr)
-
-    def test_allow_remote_without_mock_still_refuses_weights(self):
-        result = _run(["serve", "--allow-remote"])
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("real weights are not bundled", result.stderr)
+    def test_without_mock_requires_mock_regardless_of_model_flag_or_remote(self):
+        for model in (None, "1"):
+            for remote in (False, True):
+                with self.subTest(model=model, remote=remote):
+                    env = _env()
+                    env.pop("SYSTEMONE_MODEL", None)
+                    if model is not None:
+                        env["SYSTEMONE_MODEL"] = model
+                    args = ["serve", "--allow-remote"] if remote else ["serve"]
+                    result = _run(args, env=env)
+                    self.assertEqual(result.returncode, 2)
+                    self.assertEqual(result.stdout, "")
+                    self.assertIn("real weights are not bundled", result.stderr)
+                    self.assertIn("requires --mock", result.stderr)
+                    self.assertNotIn("SYSTEMONE_MODEL", result.stderr)
+                    self.assertNotIn("future release", result.stderr)
+                    self.assertNotIn("import torch", result.stderr)
 
     def test_mock_serves_health_and_decide(self):
         port = _free_port()
