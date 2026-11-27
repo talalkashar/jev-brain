@@ -1,4 +1,4 @@
-"""Drive the shipped `systemone use` command. The stand-in jev-run only records argv."""
+"""Drive the shipped `jev-brain use` command. The stand-in jev-run only records argv."""
 
 import json
 import stat
@@ -40,11 +40,13 @@ class UseCommandTests(unittest.TestCase):
         script.write_text(
             f"#!{sys.executable}\n"
             "import os\n"
+            "import json\n"
             "import sys\n"
             "from pathlib import Path\n"
-            "Path(os.environ['SYSTEMONE_USE_ARGV']).write_text(\n"
+            "Path(os.environ['JEV_BRAIN_USE_ARGV']).write_text(\n"
             "    '\\n'.join(sys.argv) + '\\n', encoding='utf-8'\n"
-            ")\n",
+            ")\n"
+            "print(os.environ.get('STUB_REPLY', json.dumps({'outcome': 'dry run', 'steps_taken': 1})))\n",
             encoding="utf-8",
         )
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
@@ -52,7 +54,8 @@ class UseCommandTests(unittest.TestCase):
             (self.bin_dir / "jev-run.cmd").write_text(f'@"{sys.executable}" "%~dp0jev-run" %*\n', encoding="utf-8")
 
     def _child_env(self, path: Path | None = None):
-        return _env(PATH=str(path or self.bin_dir), SYSTEMONE_USE_ARGV=str(self.log))
+        return _env(PATH=str(path or self.bin_dir), JEV_BRAIN_USE_ARGV=str(self.log),
+                    HOME=self._temp.name, USERPROFILE=self._temp.name)
 
     def test_dry_run_starts_nothing_and_names_the_caller(self):
         result = _run(
@@ -163,7 +166,7 @@ class UseCommandTests(unittest.TestCase):
         self.assertTrue(argv[0].endswith("jev-run"))
         self.assertEqual(
             argv[1:],
-            ["--expect", "Notes", "--target", "Notes", "--text", "count the windows"],
+            ["count the windows", "--expect", "Notes", "--steps", "1", "--handoffs", "0"],
         )
         self.assertNotIn("--act", argv)
         print("armed recorder argv has no --act; decision_maker is caller")
@@ -180,19 +183,19 @@ class UseCommandTests(unittest.TestCase):
         self.assertEqual(result.stdout, "")
         self.assertFalse(self.log.exists())
 
-    def test_help_offers_arm_and_has_no_act_flag(self):
+    def test_help_offers_preview_and_opt_in_act(self):
         result = _run(["use", "--help"])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--arm", result.stdout)
         self.assertIn("--target", result.stdout)
-        self.assertNotRegex(result.stdout, r"(?m)^\s*--act\b")
+        self.assertIn("--act", result.stdout)
 
 
 class SurfaceListTests(unittest.TestCase):
     """Names ported from the jev fork's sensitive-surface gate, and ordinary targets that stay allowed."""
 
     def test_named_apps_sites_and_codes_are_refused(self):
-        from systemone.computer_use import sensitive_surface
+        from jev_brain.computer_use import sensitive_surface
 
         cases = {
             "banking": ("PayPal", "open Venmo", "Coinbase", "Wallet", "Wells Fargo"),
@@ -208,7 +211,7 @@ class SurfaceListTests(unittest.TestCase):
                     self.assertEqual(sensitive_surface("Safari", phrase), name)
 
     def test_ordinary_targets_are_allowed(self):
-        from systemone.computer_use import sensitive_surface
+        from jev_brain.computer_use import sensitive_surface
 
         for target, request in (("Notes", "count the windows"), ("Finder", "open the Downloads folder"),
                                 ("Calendar", "show next week"), ("System Settings", "turn on dark mode")):

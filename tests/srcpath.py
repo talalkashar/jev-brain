@@ -1,7 +1,7 @@
 """Put the package source on sys.path.
 
-`python3 -m unittest discover -s labs/systemone/tests` runs from the repo root
-and does not set PYTHONPATH. Importing this module makes `systemone` importable
+`python3 -m unittest discover -s tests` runs from the repo root
+and does not set PYTHONPATH. Importing this module makes `jev_brain` importable
 for that command. Subprocess tests still pass PYTHONPATH themselves.
 """
 

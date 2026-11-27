@@ -3,7 +3,7 @@
 import unittest
 
 import srcpath  # side effect: put src/ on sys.path
-from systemone.questions import (
+from jev_brain.questions import (
     MAX_CHOICE_LABELS,
     MAX_INSTRUCTION_CHARS,
     MAX_QUESTIONS,

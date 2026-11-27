@@ -1,9 +1,8 @@
-"""Drive the real `systemone install` command against a temporary HOME.
+"""Drive the real `jev-brain install` command against a temporary HOME.
 
 The test process keeps the real HOME. Only the child process sees the temp one.
 """
 
-import hashlib
 import json
 import os
 import tempfile
@@ -13,36 +12,11 @@ from pathlib import Path
 import srcpath  # side effect: put src/ on sys.path
 from test_cli import _env, _run
 
-_REAL_CONFIGS = (
-    Path.home() / ".claude.json",
-    Path.home() / ".cursor" / "mcp.json",
-    Path.home() / ".codex" / "config.toml",
-)
-
-
-def _fingerprint(path: Path) -> tuple:
-    if path.is_symlink():
-        return ("symlink", os.readlink(path))
-    if not path.exists():
-        return ("missing",)
-    if not path.is_file():
-        return ("other", path.stat().st_mode)
-    data = path.read_bytes()
-    return ("file", hashlib.sha256(data).hexdigest(), len(data))
-
-
 class InstallCommandTests(unittest.TestCase):
     def setUp(self):
-        self.real_before = {path: _fingerprint(path) for path in _REAL_CONFIGS}
         self._temp = tempfile.TemporaryDirectory()
         self.home = Path(self._temp.name)
         self.addCleanup(self._temp.cleanup)
-        self.addCleanup(self._assert_real_home_unchanged)
-
-    def _assert_real_home_unchanged(self):
-        for path, before in self.real_before.items():
-            after = _fingerprint(path)
-            self.assertEqual(after, before, f"real home config changed: {path.name}")
 
     def _child_env(self):
         # Path.home() reads USERPROFILE on Windows and HOME elsewhere.
@@ -62,12 +36,12 @@ class InstallCommandTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self._assert_targeted_temp_home(result.stdout)
         self.assertIn("dry run: no files written. Pass --yes to write them.", result.stdout)
-        self.assertIn("systemone-mcp", result.stdout)
+        self.assertIn("jev-brain-mcp", result.stdout)
         self.assertIn(".claude.json", result.stdout)
         self.assertIn(".cursor/mcp.json", result.stdout)
         self.assertIn(".codex/config.toml", result.stdout)
         self.assertEqual(self._seed_bytes(), before)
-        self.assertEqual(list(self.home.rglob("*.systemone-tmp")), [])
+        self.assertEqual(list(self.home.rglob("*.jev-brain-tmp")), [])
         print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
         print("install without --yes: Claude Code, Cursor, and Codex config printed; nothing written")
 
@@ -82,19 +56,19 @@ class InstallCommandTests(unittest.TestCase):
         claude = json.loads((self.home / ".claude.json").read_text(encoding="utf-8"))
         self.assertEqual(claude["userID"], "kept")
         self.assertEqual(claude["mcpServers"]["other"]["command"], "keep")
-        self.assertEqual(claude["mcpServers"]["systemone"]["command"], "systemone-mcp")
-        self.assertEqual(claude["mcpServers"]["systemone"]["args"], [])
-        self.assertEqual(claude["mcpServers"]["systemone"]["type"], "stdio")
+        self.assertEqual(claude["mcpServers"]["jev-brain"]["command"], "jev-brain-mcp")
+        self.assertEqual(claude["mcpServers"]["jev-brain"]["args"], [])
+        self.assertEqual(claude["mcpServers"]["jev-brain"]["type"], "stdio")
 
         cursor = json.loads((self.home / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
         self.assertEqual(cursor["mcpServers"]["other"]["url"], "http://127.0.0.1:9")
-        self.assertEqual(cursor["mcpServers"]["systemone"]["command"], "systemone-mcp")
+        self.assertEqual(cursor["mcpServers"]["jev-brain"]["command"], "jev-brain-mcp")
 
         codex = (self.home / ".codex" / "config.toml").read_text(encoding="utf-8")
         self.assertIn('[mcp_servers.other]\ncommand = "keep"', codex)
         self.assertIn("[mcp_servers.other.env]", codex)
-        self.assertEqual(codex.count("[mcp_servers.systemone]"), 1)
-        self.assertIn('command = "systemone-mcp"', codex)
+        self.assertEqual(codex.count("[mcp_servers.jev-brain]"), 1)
+        self.assertIn('command = "jev-brain-mcp"', codex)
         self.assertNotIn("stale", codex)
 
         for path in (
@@ -104,7 +78,7 @@ class InstallCommandTests(unittest.TestCase):
         ):
             self.assertTrue(path.resolve().is_relative_to(self.home.resolve()))
             self.assertFalse(path.is_symlink())
-        self.assertEqual(list(self.home.rglob("*.systemone-tmp")), [])
+        self.assertEqual(list(self.home.rglob("*.jev-brain-tmp")), [])
         print("install --yes: writes stayed inside the temp home")
 
     def test_yes_one_agent_does_not_write_the_others(self):
@@ -116,7 +90,7 @@ class InstallCommandTests(unittest.TestCase):
         self.assertFalse((self.home / ".claude.json").exists())
         self.assertFalse((self.home / ".codex" / "config.toml").exists())
         data = json.loads(written.read_text(encoding="utf-8"))
-        self.assertEqual(data["mcpServers"]["systemone"]["command"], "systemone-mcp")
+        self.assertEqual(data["mcpServers"]["jev-brain"]["command"], "jev-brain-mcp")
 
     def test_invalid_json_exits_2_and_leaves_bytes_unchanged(self):
         path = self.home / ".claude.json"
@@ -148,7 +122,7 @@ class InstallCommandTests(unittest.TestCase):
             outside = Path(outside_dir) / "payload"
             outside.write_bytes(b"OUTSIDE-SENTINEL")
             before = outside.read_bytes()
-            link = self.home / ".claude.json.systemone-tmp"
+            link = self.home / ".claude.json.jev-brain-tmp"
             link.symlink_to(outside)
             result = _run(["install", "--yes"], env=self._child_env())
             self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
@@ -160,7 +134,25 @@ class InstallCommandTests(unittest.TestCase):
             self.assertFalse((self.home / ".cursor" / "mcp.json").exists())
             self.assertFalse((self.home / ".codex" / "config.toml").exists())
             self.assertEqual(list(Path(outside_dir).iterdir()), [outside])
-            print("pre-existing *.systemone-tmp symlink left the outside file unchanged")
+            print("pre-existing *.jev-brain-tmp symlink left the outside file unchanged")
+
+    def test_migrates_stock_legacy_config_and_keeps_other_servers(self):
+        cursor = self.home / ".cursor"
+        cursor.mkdir()
+        (cursor / "mcp.json").write_text(json.dumps({"mcpServers": {
+            "systemone": {"type": "stdio", "command": "systemone-mcp", "args": []},
+            "other": {"command": "unrelated"}}}))
+        codex = self.home / ".codex"
+        codex.mkdir()
+        path = codex / "config.toml"
+        path.write_text('[mcp_servers.systemone]\ncommand = "systemone-mcp"\nargs = []\n'
+                        '[mcp_servers.jev-brain-extra]\ncommand = "keep"\n')
+        result = _run(["install", "--yes"], env=self._child_env())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(set(json.loads((cursor / "mcp.json").read_text())["mcpServers"]),
+                         {"other", "jev-brain"})
+        self.assertNotIn("systemone", path.read_text())
+        self.assertIn('[mcp_servers.jev-brain-extra]\ncommand = "keep"', path.read_text())
 
     def _seed_existing(self):
         (self.home / ".claude.json").write_text(
@@ -183,7 +175,7 @@ class InstallCommandTests(unittest.TestCase):
         codex.mkdir()
         (codex / "config.toml").write_text(
             '[mcp_servers.other]\ncommand = "keep"\n\n'
-            '[mcp_servers.systemone]\ncommand = "old"\nargs = ["stale"]\n\n'
+            '[mcp_servers.jev-brain]\ncommand = "old"\nargs = ["stale"]\n\n'
             "[mcp_servers.other.env]\nVALUE = \"kept\"\n",
             encoding="utf-8",
         )

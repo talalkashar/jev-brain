@@ -11,8 +11,8 @@ import unittest
 from pathlib import Path
 
 import srcpath  # side effect: put src/ on sys.path
-from systemone.engine import MockEngine
-from systemone.server import DecisionServer
+from jev_brain.engine import MockEngine
+from jev_brain.server import DecisionServer
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -21,6 +21,7 @@ SRC = ROOT / "src"
 class McpProcess:
     def __init__(self, url: str | None):
         env = os.environ.copy()
+        env.pop("JEV_BRAIN_URL", None)
         env.pop("SYSTEMONE_URL", None)
         previous = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = str(SRC) if not previous else str(SRC) + os.pathsep + previous
@@ -28,7 +29,7 @@ class McpProcess:
             env["SYSTEMONE_URL"] = url
         self.stderr_lines: list[str] = []
         self.proc = subprocess.Popen(
-            [sys.executable, "-m", "systemone.mcp_server"],
+            [sys.executable, "-m", "jev_brain.mcp_server"],
             cwd=ROOT,
             env=env,
             stdin=subprocess.PIPE,
@@ -127,7 +128,7 @@ class McpServerTests(unittest.TestCase):
         result = initialized["result"]
         self.assertEqual(result["protocolVersion"], "2024-11-05")
         self.assertIn("tools", result["capabilities"])
-        self.assertEqual(result["serverInfo"], {"name": "systemone", "version": "0.1.0"})
+        self.assertEqual(result["serverInfo"], {"name": "jev-brain", "version": "0.1.0"})
         self.assertIn("untrusted", result["instructions"])
 
         self.mcp.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
@@ -139,7 +140,7 @@ class McpServerTests(unittest.TestCase):
         self.mcp.send({"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
         listed = self.mcp.recv()
         names = [tool["name"] for tool in listed["result"]["tools"]]
-        self.assertEqual(names, ["health", "decide"])
+        self.assertEqual(names, ["health", "decide", "use"])
 
         token = "SECRET-STATE-TOKEN"
         self.mcp.send(
@@ -224,7 +225,7 @@ class McpDownTests(unittest.TestCase):
         mcp = McpProcess("http://127.0.0.1:9")
         self.addCleanup(mcp.close)
         mcp.send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
-        self.assertEqual(mcp.recv()["result"]["serverInfo"]["name"], "systemone")
+        self.assertEqual(mcp.recv()["result"]["serverInfo"]["name"], "jev-brain")
         mcp.send(
             {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "health"}}
         )
@@ -232,7 +233,7 @@ class McpDownTests(unittest.TestCase):
         self.assertNotIn("error", response)
         self.assertIs(response["result"]["isError"], True)
         text = response["result"]["content"][0]["text"]
-        self.assertIn("systemone serve --mock", text)
+        self.assertIn("jev-brain serve --mock", text)
 
 
 if __name__ == "__main__":

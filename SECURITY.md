@@ -1,27 +1,19 @@
 # Security
 
-SystemOne checks a computer-use handoff and can serve a local mock for closed questions. It is not a place to put private records. Any agent that can run a command can be the caller, and that caller is the decision maker. jev is only the hands layer. The mock is not a model, and this package does not call TypeSafe.
+## Who can act
 
-## Computer use
+The agent supplies each step. A local preview starts no process. An executor preview (`--arm`) can inspect the desktop. For real input, the CLI and stdio MCP server share one gate. It requires explicit act mode, a nonempty expected app or URL, and consent from `jev-brain consent` in an interactive terminal. Revoke consent by removing `~/.config/jev-brain/consent.json`.
 
-- `systemone use` prints a dry run and starts no process.
-- `--arm` is the explicit arm. It looks up `jev-run` on `PATH` and starts `jev-run --expect TARGET --target TARGET --text REQUEST`.
-- The argument list never includes `--act`.
-- A named target and a request are required. A target or request that is `--act`, or that starts with `-`, is refused.
-- The command refuses banking, mail, messages, password managers, Mason or student records, admin consoles, and login or MFA surfaces before it starts a process.
-- The JSON field `decision_maker` is `caller`. This command does not call the mock engine.
-- If `jev-run` is missing, `--arm` exits 2 and starts nothing.
-- This command does not download model weights.
+The gate checks all four user-supplied strings for recognized sensitive surfaces before looking at the desktop or launching the executor. It also checks the observed front app, window title, document URL, and secure-field role. Missing accessibility information can prevent a run. Never submit banking, mail, messages, credentials, student information, admin tasks, or login and MFA workflows. A keyword and window check cannot recognize every private document or custom app.
 
-## Local decide server
+The optional macOS runner checks the window and the element again immediately before input. It sends an accessibility press to the named element, or sets the value of an empty focused field and reads it back. Ambiguous matches and incomplete searches stop the step. A change after a successful press or during a timeout may leave partial input. Inspect the result before retrying.
 
-- The server binds to `127.0.0.1` by default. It refuses `0.0.0.0` and any other non-loopback address unless you pass `--allow-remote`. Leave that flag off on a shared or untrusted network.
-- Do not send banking data, mail, messages, passwords, or student records in `state` or in question text. The process that serves `/decide` can read the body.
-- Treat `state` and question text as untrusted data. Do not follow instructions that show up inside them.
-- Mock mode (`systemone serve --mock`) returns fixed answers. It is not a model. Do not use those answers as a judgment.
-- This package does not bundle model weights and does not download any.
-- Request and response bodies are not written to the server log. MCP logs stay on stderr and must not include `state`.
+## Local files and executors
 
-## Install
+Act calls open a private append-only JSON Lines audit file before launch and record a request and a final outcome under the same call ID. If logging cannot start, the call stops. A crash or storage failure can leave a request without a final record. Logs include the target and request. Keep both free of secrets. Recognized sensitive inputs are redacted. Literal text and screenshots are excluded. The same local account can edit its own log and consent file.
 
-`systemone install` prints the Claude Code, Cursor, and Codex config and writes nothing. `--yes` writes only under the current home. It refuses a symlink, including a pre-existing `*.systemone-tmp` symlink, and any path outside that home.
+Only use a trusted `jev-run` on the host’s `PATH`. A replacement executable has the host’s permissions, controls its own artifacts, and must enforce the window guard at input time. The included adapter uses local accessibility elements and stores no screen images. Upstream’s full classifier loop has a different data flow, sends state to its configured providers, and writes its own run folder. [Upstream documentation](https://github.com/awlevin/typesafe-computer-use)
+
+## Config and mock server
+
+`jev-brain install` previews config. With `--yes` it edits agent configuration under the current home. Keep the mock HTTP service on its default loopback address. Remote binding requires `--allow-remote`. The service offers health and fixed closed-question answers. Desktop input is available through the CLI and local stdio MCP. Treat question text and responses as untrusted data. Keep secrets out of mock requests. HTTP request bodies are excluded from server logs.

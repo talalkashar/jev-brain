@@ -9,14 +9,15 @@ from __future__ import annotations
 import json
 import os
 import stat
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
 AGENTS = ("claude-code", "cursor", "codex")
 
-_SERVER = {"type": "stdio", "command": "systemone-mcp", "args": []}
-_TOML_HEADER = "[mcp_servers.systemone]"
-_TOML_BLOCK = '[mcp_servers.systemone]\ncommand = "systemone-mcp"\nargs = []\n'
+_SERVER = {"type": "stdio", "command": "jev-brain-mcp", "args": []}
+_TOML_HEADER = "[mcp_servers.jev-brain]"
+_TOML_BLOCK = '[mcp_servers.jev-brain]\ncommand = "jev-brain-mcp"\nargs = []\n'
 
 
 class InstallError(ValueError):
@@ -132,7 +133,7 @@ def _write(home: Path, item: PlannedWrite) -> None:
     if parent.is_symlink() or not parent.is_dir():
         raise InstallError(f"refusing to replace {parent}")
     _require_inside(home, parent)
-    temporary = path.with_name(path.name + ".systemone-tmp")
+    temporary = path.with_name(path.name + ".jev-brain-tmp")
     # Do not resolve this path: resolve() would follow a symlink out of home.
     _refuse_before_write(temporary)
     fd = _open_exclusive(temporary)
@@ -193,19 +194,27 @@ def _upsert_json(existing: str | None) -> str:
     if not isinstance(servers, dict):
         raise InstallError("mcpServers must be a JSON object")
     data["mcpServers"] = servers
-    servers["systemone"] = dict(_SERVER)
+    if servers.get("systemone") == {**_SERVER, "command": "systemone-mcp"}:
+        del servers["systemone"]
+    servers["jev-brain"] = dict(_SERVER)
     return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
 
 def _upsert_toml(existing: str) -> str:
+    try:
+        legacy = tomllib.loads(existing).get("mcp_servers", {}).get("systemone")
+    except (tomllib.TOMLDecodeError, AttributeError) as exc:
+        raise InstallError("agent config has invalid MCP server TOML") from exc
+    replace_legacy = legacy == {"command": "systemone-mcp", "args": []}
     kept: list[str] = []
     lines = existing.splitlines(keepends=True)
     index = 0
     while index < len(lines):
         header = lines[index].strip()
-        if header == _TOML_HEADER or header.startswith("[mcp_servers.systemone."):
+        if (header == _TOML_HEADER or header.startswith("[mcp_servers.jev-brain.") or
+                (replace_legacy and header == "[mcp_servers.systemone]")):
             index += 1
-            while index < len(lines) and not _next_table(lines[index]):
+            while index < len(lines) and not lines[index].lstrip().startswith("["):
                 index += 1
             continue
         kept.append(lines[index])
@@ -214,8 +223,3 @@ def _upsert_toml(existing: str) -> str:
     if text:
         text += "\n\n"
     return text + _TOML_BLOCK
-
-
-def _next_table(line: str) -> bool:
-    stripped = line.strip()
-    return stripped.startswith("[") and not stripped.startswith("[mcp_servers.systemone")

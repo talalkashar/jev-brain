@@ -3,8 +3,8 @@
 import unittest
 
 import srcpath  # side effect: put src/ on sys.path
-from systemone import __version__
-from systemone.engine import Engine, MockEngine
+from jev_brain import __version__
+from jev_brain.engine import Engine, MockEngine
 
 
 def _questions():

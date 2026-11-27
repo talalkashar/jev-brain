@@ -2,7 +2,7 @@
 
 from typing import Protocol, runtime_checkable
 
-from systemone.questions import validate_questions, validate_state
+from jev_brain.questions import validate_questions, validate_state
 
 
 @runtime_checkable

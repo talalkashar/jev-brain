@@ -1,3 +1,3 @@
-"""Guarded handoff for a chosen agent. The caller decides. Mock answers are wiring."""
+"""Compatibility package for the old module commands and Python client."""
 
-__version__ = "0.1.0"
+from jev_brain import __version__
