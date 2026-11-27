@@ -29,7 +29,10 @@ def private_file(name, flags):
 def consented():
     try:
         with os.fdopen(private_file("consent.json", os.O_RDONLY), encoding="utf-8") as stream:
-            config = json.load(stream)
+            raw = stream.read(1025)
+            if len(raw) > 1024:
+                return False
+            config = json.loads(raw)
             return isinstance(config, dict) and config.get("allow_act") is True
     except (OSError, ValueError):
         return False

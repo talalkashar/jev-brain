@@ -68,8 +68,8 @@ class InstallCommandTests(unittest.TestCase):
         self.assertIn('[mcp_servers.other]\ncommand = "keep"', codex)
         self.assertIn("[mcp_servers.other.env]", codex)
         self.assertEqual(codex.count("[mcp_servers.jev-brain]"), 1)
-        self.assertIn('command = "jev-brain-mcp"', codex)
-        self.assertNotIn("stale", codex)
+        self.assertIn('command = "old"', codex)
+        self.assertIn('args = ["stale"]', codex)
 
         for path in (
             self.home / ".claude.json",
@@ -136,7 +136,7 @@ class InstallCommandTests(unittest.TestCase):
             self.assertEqual(list(Path(outside_dir).iterdir()), [outside])
             print("pre-existing *.jev-brain-tmp symlink left the outside file unchanged")
 
-    def test_migrates_stock_legacy_config_and_keeps_other_servers(self):
+    def test_preserves_legacy_server_identity_and_other_servers(self):
         cursor = self.home / ".cursor"
         cursor.mkdir()
         (cursor / "mcp.json").write_text(json.dumps({"mcpServers": {
@@ -150,8 +150,8 @@ class InstallCommandTests(unittest.TestCase):
         result = _run(["install", "--yes"], env=self._child_env())
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(set(json.loads((cursor / "mcp.json").read_text())["mcpServers"]),
-                         {"other", "jev-brain"})
-        self.assertNotIn("systemone", path.read_text())
+                         {"other", "systemone"})
+        self.assertNotIn("[mcp_servers.jev-brain]", path.read_text())
         self.assertIn('[mcp_servers.jev-brain-extra]\ncommand = "keep"', path.read_text())
 
     def _seed_existing(self):

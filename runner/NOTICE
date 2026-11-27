@@ -1,0 +1,4 @@
+jev-brain-macos-runner is distributed under the MIT License (see LICENSE).
+It uses the macOS accessibility backend from typesafe-computer-use,
+Copyright (c) 2026 Aaron Levin, distributed under the MIT License.
+https://github.com/awlevin/typesafe-computer-use

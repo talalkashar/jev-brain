@@ -92,15 +92,18 @@ def main() -> None:
 
 
 def serve_stdio() -> int:
-    for line in sys.stdin:
-        if line.strip() == "":
-            continue
+    stream = sys.stdin.buffer
+    while line := stream.readline(MAX_LINE_CHARS + 1):
         if len(line) > MAX_LINE_CHARS:
+            while line and not line.endswith(b"\n"):
+                line = stream.readline(MAX_LINE_CHARS + 1)
             _write(_error(None, -32700, "Parse error"))
             continue
+        if not line.strip():
+            continue
         try:
-            message = json.loads(line)
-        except json.JSONDecodeError:
+            message = json.loads(line.decode("utf-8"))
+        except (ValueError, RecursionError):
             _write(_error(None, -32700, "Parse error"))
             continue
         if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":

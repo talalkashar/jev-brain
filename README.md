@@ -34,7 +34,7 @@ jev-brain doctor
 
 In **System Settings → Privacy & Security → Accessibility**, allow the app that hosts the CLI or agent. Run `doctor` from that host. It checks Python, the runner on `PATH`, and the current process’s permission status. The included adapter uses macOS accessibility elements. A screen-capturing runner also needs **Screen Recording**. [Upstream installation and permissions](https://github.com/awlevin/typesafe-computer-use/tree/44ca11f0935b021b73020825da054b5c92cc1288#install)
 
-If you already use a guarded `jev-run`, put its directory first on `PATH`. It must accept a positional goal, `--expect`, `--target`, `--text`, `--steps 1`, `--handoffs 0`, and `--act`. It must check focus again at input time and print a JSON outcome. Upstream’s standalone command is `clicker` and has a different interface. [Upstream command definition](https://github.com/awlevin/typesafe-computer-use/blob/44ca11f0935b021b73020825da054b5c92cc1288/typesafe_computer_use/cli.py)
+If you already use a guarded `jev-run`, put its directory first on `PATH`. It must accept a positional goal, `--expect`, `--target`, `--text`, `--steps 1`, `--handoffs 0`, and `--act`. It must enforce one mutation, recheck focus at input time, and return a recognized JSON outcome with a truthful `steps_taken` count (zero on preview, one on confirmed input). A replacement executable controls its own files. Install both bundled packages in one environment. Upstream’s standalone command is `clicker` and has a different interface. [Upstream command definition](https://github.com/awlevin/typesafe-computer-use/blob/44ca11f0935b021b73020825da054b5c92cc1288/typesafe_computer_use/cli.py)
 
 To install Aaron’s standalone classifier CLI separately, clone `https://github.com/awlevin/typesafe-computer-use`, change into that checkout, and run `uv sync`. Copy its `.env.example` to `.env` there and configure `TYPESAFE_API_KEY` yourself. The upstream executable is `.venv/bin/clicker`. [Upstream setup](https://github.com/awlevin/typesafe-computer-use/tree/44ca11f0935b021b73020825da054b5c92cc1288#install)
 
@@ -51,12 +51,12 @@ jev-brain use --act --expect TextEdit --target 'focused field' \
   --request 'Write a greeting in the empty document' --text 'Hello from jev-brain.'
 ```
 
-For a button, put its exact accessibility label in `--target` and omit `--text`. For a browser, use the full active URL as `--expect`, including the path. The optional adapter requires a readable URL and a unique accessible control in the front window. For text, it requires an empty editable field. Controls drawn only as pixels are outside this adapter’s reach. [Notes preview](examples/notes-preview.sh) · [TextEdit demo](examples/textedit.sh)
+For a button, pass its exact accessibility title or description as `--target` and omit `--text`. The adapter checks the whole exposed window tree, including offscreen elements, up to 512 elements. It requires one match that supports a press and is visible at its centre. For text, use `--target 'focused field'` on an empty editable field. Request a press and a write in separate calls. [Notes preview](examples/notes-preview.sh) · [TextEdit demo](examples/textedit.sh)
 
 | Result field | How to read it |
 | --- | --- |
 | `outcome` | For example, `target clicked`, `text typed`, `wrong window`, `sensitive`, or `timeout`. |
-| `clicked`, `typed` | Confirmed control label and literal text, when available. A click can succeed before a later text operation stops. |
+| `clicked`, `typed` | Confirmed control label and literal text, when available. Each call can confirm one mutation. |
 | `confidence` | Runner-supplied confidence, or `null`. The exact-control adapter uses no classifier. |
 | `steps` | Runner-reported count, zero before launch, or `null` when the runner cannot report it. |
 
@@ -64,10 +64,11 @@ Check the outcome before issuing another step. If a run times out, is interrupte
 
 ## Safety and local data
 
-- A normal `use` call starts no process. `--arm` runs one executor preview. Input requires both `--act` and local consent. MCP has no consent tool.
-- The gate checks the target, request, expectation, and literal text before starting an executor. It refuses recognized banking, mail, messages, password managers, student records, admin consoles, and login or MFA surfaces. It also checks the focused app, window title, document URL, and secure-field role before live input. Labels and URLs can be incomplete. Keep secrets out of every argument.
-- An act call requires the matching window or URL to **already be in front**. The included runner checks again before each input and addresses the accessibility element directly. It returns control after one step. The parent enforces a 30-second timeout. Ctrl-C stops the live process group on macOS.
-- Act calls append a timestamp, target, request, and outcome to `~/.config/jev-brain/audit.jsonl`. Sensitive requests have their target and request redacted. The log omits the literal text argument. The included runner captures no screenshots. A separately installed executor controls its own artifacts.
+- A normal `use` call checks the handoff locally on any supported OS. On macOS, `--arm` and `--act` both require a verified foreground before starting an executor. Input also requires local consent. The installed `jev-run` entry point uses the same supervisor.
+- Native app expectations support TextEdit, Notes, Finder and Calendar by bundle identity. Recognized browsers require an exact, readable HTTP(S) document URL, including its path. Unknown bundles, missing required metadata and failed accessibility reads stop the call.
+- The gate checks the arguments, the actual app, window title and URL, and the focused control’s role, subrole, title, description and placeholder. It refuses recognized banking, mail, messaging, password managers, student records, admin consoles and login or MFA. After Unicode normalization it conservatively refuses remaining non-ASCII text, including many ordinary localized labels. Accessibility metadata can omit private content.
+- A 30-second deadline covers foreground observation, execution and pipe cleanup. Ctrl-C stops the supervised process group. An interrupted or unconfirmed mutation may already have reached the app.
+- Act attempts append a timestamp, random call ID, combined argument length, verified app bundle when available, and a fixed outcome code to `~/.config/jev-brain/audit.jsonl`. Request text, typed text, control labels, window titles, URLs and arbitrary executor output stay out of this file. The bundled runner stores no screenshots.
 - To revoke consent, remove `~/.config/jev-brain/consent.json`. Programs with shell or file access under your user account share your permissions. Only connect agents and executors you trust. [Security details](SECURITY.md)
 
 ## MCP and older commands
@@ -78,7 +79,7 @@ Run `jev-brain-mcp` as a stdio MCP server. Its `use` tool runs locally without a
 {"target":"focused field","request":"Write a greeting in the empty document","expect":"TextEdit","text":"Hello from jev-brain.","act":true}
 ```
 
-Omit `act` for a preview. The tool returns JSON in its text content and in `structuredContent`. The installer prints the Claude Code, Cursor, and Codex configuration with `jev-brain install`. Add `--yes` to write it. Ensure the agent’s `PATH` includes the virtual environment’s `bin` directory so it can find both commands.
+Omit `act` for a preview. The tool returns JSON in its text content and in `structuredContent`. Run `jev-brain install` for a summary of proposed changes to Claude Code, Cursor and Codex. Add `--yes` to apply them. Existing jev-brain and legacy systemone entries keep their name and settings, including disabled states. The installer declines TOML layouts that cannot accept a verified new table. Ensure the agent’s `PATH` includes the virtual environment’s `bin` directory so it can find both commands.
 
 The old `systemone` and `systemone-mcp` commands forward to the new commands and print a deprecation line on stderr. Python code can import `jev_brain`. Existing `health` and `decide` clients can still use the local closed-question mock, started with `jev-brain serve --mock`. It returns fixed answers. Set `JEV_BRAIN_URL` to change its default loopback URL. `SYSTEMONE_URL` is the fallback.
 

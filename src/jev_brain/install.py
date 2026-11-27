@@ -16,7 +16,6 @@ from pathlib import Path
 AGENTS = ("claude-code", "cursor", "codex")
 
 _SERVER = {"type": "stdio", "command": "jev-brain-mcp", "args": []}
-_TOML_HEADER = "[mcp_servers.jev-brain]"
 _TOML_BLOCK = '[mcp_servers.jev-brain]\ncommand = "jev-brain-mcp"\nargs = []\n'
 
 
@@ -30,6 +29,7 @@ class PlannedWrite:
 
     path: Path
     content: str
+    existing: str | None
 
 
 def plan_install(home: Path, agents: tuple[str, ...] | list[str] = AGENTS) -> list[PlannedWrite]:
@@ -44,7 +44,7 @@ def plan_install(home: Path, agents: tuple[str, ...] | list[str] = AGENTS) -> li
             content = _upsert_toml(existing or "")
         else:
             content = _upsert_json(existing)
-        planned.append(PlannedWrite(path, content))
+        planned.append(PlannedWrite(path, content, existing))
     return planned
 
 
@@ -56,12 +56,16 @@ def apply_install(home: Path, planned: list[PlannedWrite], *, yes: bool) -> str:
         _require_inside(root, item.path)
         lines.append(f"agent: {_agent_label(root, item.path)}")
         lines.append(f"file: {item.path.relative_to(root).as_posix()}")
-        lines.append(item.content.rstrip("\n"))
+        lines.append("keep existing MCP configuration" if item.content == item.existing else
+                     "add jev-brain with command jev-brain-mcp")
     if not yes:
         lines.append("dry run: no files written. Pass --yes to write them.")
         return "\n".join(lines) + "\n"
     for item in planned:
-        _write(root, item)
+        if item.content != item.existing:
+            if _read(item.path) != item.existing:
+                raise InstallError("Agent configuration changed during installation. Run install again.")
+            _write(root, item)
     lines.append("wrote the files above.")
     return "\n".join(lines) + "\n"
 
@@ -178,48 +182,67 @@ def _write_all(fd: int, payload: bytes) -> None:
         view = view[wrote:]
 
 
+def _unique_keys(pairs):
+    values = {}
+    for key, value in pairs:
+        if key in values:
+            raise InstallError("Agent config contains duplicate JSON keys.")
+        values[key] = value
+    return values
+
+
 def _upsert_json(existing: str | None) -> str:
     if existing is None or existing.strip() == "":
         data: dict = {}
     else:
         try:
-            data = json.loads(existing)
+            data = json.loads(existing, object_pairs_hook=_unique_keys)
         except json.JSONDecodeError as exc:
             raise InstallError(f"agent config is not valid JSON: {exc}") from exc
         if not isinstance(data, dict):
             raise InstallError("agent config must be a JSON object")
-    servers = data.get("mcpServers")
-    if servers is None:
-        servers = {}
+    servers = data.get("mcpServers", {})
     if not isinstance(servers, dict):
         raise InstallError("mcpServers must be a JSON object")
-    data["mcpServers"] = servers
-    if servers.get("systemone") == {**_SERVER, "command": "systemone-mcp"}:
-        del servers["systemone"]
+    if _has_server_policy(servers, data):
+        return existing
     servers["jev-brain"] = dict(_SERVER)
+    data["mcpServers"] = servers
     return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+
+
+def _has_server_policy(servers, config):
+    if "jev-brain" in servers or "systemone" in servers:
+        return True
+    return _references_server(config)
+
+
+def _references_server(value):
+    # A disabled-server list or agent-specific policy can live outside the
+    # server table. Preserve the server name those restrictions apply to.
+    if isinstance(value, dict):
+        return any(_references_server(k) or _references_server(v) for k, v in value.items())
+    if isinstance(value, list):
+        return any(_references_server(item) for item in value)
+    if not isinstance(value, str):
+        return False
+    value = value.casefold()
+    return (value in ("systemone", "jev-brain", "systemone-mcp", "jev-brain-mcp")
+            or "mcp__systemone__" in value or "mcp__jev-brain__" in value)
 
 
 def _upsert_toml(existing: str) -> str:
     try:
-        legacy = tomllib.loads(existing).get("mcp_servers", {}).get("systemone")
-    except (tomllib.TOMLDecodeError, AttributeError) as exc:
-        raise InstallError("agent config has invalid MCP server TOML") from exc
-    replace_legacy = legacy == {"command": "systemone-mcp", "args": []}
-    kept: list[str] = []
-    lines = existing.splitlines(keepends=True)
-    index = 0
-    while index < len(lines):
-        header = lines[index].strip()
-        if (header == _TOML_HEADER or header.startswith("[mcp_servers.jev-brain.") or
-                (replace_legacy and header == "[mcp_servers.systemone]")):
-            index += 1
-            while index < len(lines) and not lines[index].lstrip().startswith("["):
-                index += 1
-            continue
-        kept.append(lines[index])
-        index += 1
-    text = "".join(kept).rstrip()
-    if text:
-        text += "\n\n"
-    return text + _TOML_BLOCK
+        expected = tomllib.loads(existing)
+        servers = expected.setdefault("mcp_servers", {})
+        if not isinstance(servers, dict):
+            raise InstallError("mcp_servers must be a table.")
+        if _has_server_policy(servers, expected):
+            return existing
+        servers["jev-brain"] = {"command": "jev-brain-mcp", "args": []}
+        proposed = existing + ("\n" if existing else "") + _TOML_BLOCK
+        if tomllib.loads(proposed) != expected:
+            raise InstallError("Could not verify the proposed MCP server table.")
+        return proposed
+    except tomllib.TOMLDecodeError as exc:
+        raise InstallError("Cannot add the MCP server safely to this TOML configuration.") from exc

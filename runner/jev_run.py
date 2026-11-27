@@ -2,19 +2,69 @@
 
 import argparse
 import json
-import sys
 
-from jev_brain import local
-from jev_brain.computer_use import SETUP, UseRefused, check_window, sensitive_surface
+from jev_brain.computer_use import UseRefused, check_window, sensitive_surface
+from jev_brain.computer_use import perform as supervised
+
+
+def _attribute(mac, ref, key):
+    error, value = mac.AS.AXUIElementCopyAttributeValue(ref, key, None)
+    if error in (-25205, -25212):  # unsupported attribute or no value
+        return None
+    if error or value is None:
+        raise UseRefused("Incomplete accessibility tree.", "low confidence")
+    return value
+
+
+def _unique_button(mac, window, label):
+    # The upstream walker merges equal frames. Traverse the raw AXChildren of
+    # this window, counting even offscreen names before testing visibility.
+    pending = [window]
+    seen = set()
+    match = None
+    while pending:
+        ref = pending.pop()
+        if ref in seen:
+            continue
+        seen.add(ref)
+        if len(seen) > 512:
+            return None, "low confidence"
+        children = _attribute(mac, ref, "AXChildren")
+        if children is not None:
+            if len(pending) + len(children) > 512:
+                return None, "low confidence"
+            pending.extend(children)
+        labels = [_attribute(mac, ref, key) for key in ("AXTitle", "AXDescription")]
+        if any(value is not None and not isinstance(value, str) for value in labels):
+            return None, "low confidence"
+        if label in labels:
+            if match is not None:
+                return None, "low confidence"
+            match = ref
+    if match is None:
+        return None, "target not found"
+    frame = mac._ax_frame(match)
+    actions = mac._ax_actions(match)
+    if not frame or min(frame[2:]) <= 0 or "AXPress" not in actions:
+        return None, "low confidence"
+    # Hit-test the centre to exclude clipped, covered and off-display controls.
+    x, y, w, h = frame
+    error, visible = mac.AS.AXUIElementCopyElementAtPosition(
+        mac.AS.AXUIElementCreateSystemWide(), x + w / 2, y + h / 2, None)
+    if error or visible != match:
+        return None, "low confidence"
+    return match, None
 
 
 def perform(args, mac, result):
+    if args.target and args.text is not None:
+        return "refused"
     window = check_window(args.expect)
     app_ref = mac._ax_attr(mac.AS.AXUIElementCreateSystemWide(), "AXFocusedApplication")
     if app_ref is None or mac._ax_attr(app_ref, "AXTitle") != window.app:
         raise UseRefused("The front app changed.", "wrong window")
     error, pid = mac.AS.AXUIElementGetPid(app_ref, None)
-    if error:
+    if error or pid != window.pid:
         raise UseRefused("Could not identify the front app.", "wrong window")
     window_ref = mac._ax_attr(app_ref, "AXFocusedWindow")
     if window_ref is None:
@@ -26,72 +76,84 @@ def perform(args, mac, result):
             raise UseRefused("The control or window changed.", "wrong window")
 
     if args.target:
-        display = mac.Quartz.CGMainDisplayID()
-        bounds = mac.Quartz.CGDisplayBounds(display)
-        nodes, _, capped = mac.actionable_elements(pid, bounds.size.width, bounds.size.height)
-        matches = [n for n in nodes if n.label == args.target and n.ref is not None
-                   and mac._ax_attr(n.ref, "AXWindow") == window_ref]
-        if capped or len(matches) > 1:
+        ref, refusal = _unique_button(mac, window_ref, args.target)
+        if refusal:
+            return refusal
+        recheck(ref)
+        metadata = [_attribute(mac, ref, key) for key in ("AXTitle", "AXDescription", "AXSubrole",
+                                                           "AXRole", "AXPlaceholderValue")]
+        if any(value is not None and not isinstance(value, str) for value in metadata):
             return "low confidence"
-        if not matches:
-            return "target not found"
-        node = matches[0]
-        recheck(node.ref)
+        if args.target not in metadata[:2]:
+            return "low confidence"
+        if sensitive_surface(*(value for value in metadata if value)):
+            return "sensitive"
         if args.act:
-            if not mac.ax_press(node.ref):
-                return "target not clicked"
+            result["steps_taken"] = None
+            if not mac.ax_press(ref):
+                return "input unconfirmed"
             result.update(clicked=args.target, steps_taken=1)
+            return "target clicked"
+
     if args.text is not None:
         field = mac.focused_field()
         if not field or not field.is_text or field.ref is None:
             return "text not typed"
-        if (sensitive_surface(field.label, field.placeholder) or
-                "secure" in str(mac._ax_attr(field.ref, "AXSubrole")).casefold()):
+        if sensitive_surface(field.label, field.placeholder):
             return "sensitive"
+        if mac.ax_value(field.ref) != "":
+            return "text not typed"
         recheck(field.ref)
         if mac._ax_attr(app_ref, "AXFocusedUIElement") != field.ref:
             return "wrong window"
         if args.act:
-            # Never replace an existing document or send keystrokes to a different field.
-            if mac.ax_value(field.ref) != "" or not mac.ax_set_value(field.ref, args.text):
-                return "text not typed"
+            result["steps_taken"] = None
+            if not mac.ax_set_value(field.ref, args.text):
+                return "input unconfirmed"
             result["steps_taken"] = 1
             if mac.ax_value(field.ref) != args.text:
                 return "text unconfirmed"
             result["typed"] = args.text
-    if not args.act:
-        return "dry run"
-    return "text typed" if args.text is not None else "target clicked"
+            return "text typed"
+    return "refused" if args.act else "dry run"
 
 
-def main():
+def _arguments():
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("goal")
-    parser.add_argument("--expect", required=True)
+    parser.add_argument("--expect", default="")
     parser.add_argument("--target")
     parser.add_argument("--text")
     parser.add_argument("--act", action="store_true")
-    parser.add_argument("--steps", type=int, choices=[1], default=1)
-    parser.add_argument("--handoffs", type=int, choices=[0], default=0)
-    args = parser.parse_args()
+    parser.add_argument("--steps", type=int, default=1)
+    parser.add_argument("--handoffs", type=int, default=0)
+    return parser.parse_args()
+
+
+def _backend():
+    args = _arguments()
     result = dict(clicked=None, typed=None, steps_taken=0, confidence=None)
     try:
-        if sensitive_surface(args.goal, args.expect, args.target or "", args.text or ""):
-            raise UseRefused("Sensitive surface.", "sensitive")
-        if args.act and not local.consented():
-            raise UseRefused("Run jev-brain consent yourself in a local terminal first.")
-        if args.act and not args.target and args.text is None:
-            raise UseRefused("Select a control or supply literal text.")
-        if sys.platform != "darwin":
-            raise UseRefused("This runner requires macOS.")
         from typesafe_computer_use import macos
 
         result["outcome"] = perform(args, macos, result)
     except UseRefused as exc:
-        result.update(outcome=exc.outcome, error=str(exc))
-    except ImportError:
-        result.update(outcome="runner error", error=f"Install the macOS runner and its upstream dependency. {SETUP}")
+        result["outcome"] = exc.outcome
     except Exception:
-        result.update(outcome="runner error", error="Could not access the window. Run jev-brain doctor.")
+        result["outcome"] = "runner error"
     print(json.dumps(result))
-    return 0 if result["outcome"] in ("dry run", "target clicked", "text typed") else 2 if result["outcome"] == "sensitive" else 3
+    return 0 if result["outcome"] in ("dry run", "target clicked", "text typed") else 3
+
+
+def main():
+    args = _arguments()
+    target = args.target if args.target is not None else "focused field"
+    try:
+        code, result = supervised(target, args.goal, armed=not args.act, act=args.act,
+                                  expect=args.expect, text=args.text, _bundled=True,
+                                  steps=args.steps, handoffs=args.handoffs)
+    except UseRefused as exc:
+        code, result = 2, {"outcome": exc.outcome, "steps": 0, "error": str(exc)}
+    result["steps_taken"] = result["steps"]
+    print(json.dumps(result))
+    return code

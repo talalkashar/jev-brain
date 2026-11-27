@@ -1,6 +1,7 @@
 """Drive the shipped `jev-brain use` command. The stand-in jev-run only records argv."""
 
 import json
+import os
 import stat
 import sys
 import tempfile
@@ -35,6 +36,10 @@ class UseCommandTests(unittest.TestCase):
         root = Path(self._temp.name)
         self.bin_dir = root / "bin"
         self.bin_dir.mkdir()
+        (root / "sitecustomize.py").write_text(
+            "import os, sys, sysconfig\nfrom jev_brain import foreground\n"
+            "if os.name == 'posix': sysconfig.get_paths(); sys.platform = 'darwin'\n"
+            "foreground.current = lambda: foreground.Window('Notes', 'Note', '', 'AXTextArea', 'com.apple.Notes', 12)\n")
         self.log = root / "argv.log"
         script = self.bin_dir / "jev-run"
         script.write_text(
@@ -46,16 +51,14 @@ class UseCommandTests(unittest.TestCase):
             "Path(os.environ['JEV_BRAIN_USE_ARGV']).write_text(\n"
             "    '\\n'.join(sys.argv) + '\\n', encoding='utf-8'\n"
             ")\n"
-            "print(os.environ.get('STUB_REPLY', json.dumps({'outcome': 'dry run', 'steps_taken': 1})))\n",
+            "print(os.environ.get('STUB_REPLY', json.dumps({'outcome': 'dry run', 'steps_taken': 0})))\n",
             encoding="utf-8",
         )
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
-        if sys.platform == "win32":  # Windows runs no #! script: which() finds jev-run.cmd through PATHEXT
-            (self.bin_dir / "jev-run.cmd").write_text(f'@"{sys.executable}" "%~dp0jev-run" %*\n', encoding="utf-8")
-
     def _child_env(self, path: Path | None = None):
         return _env(PATH=str(path or self.bin_dir), JEV_BRAIN_USE_ARGV=str(self.log),
-                    HOME=self._temp.name, USERPROFILE=self._temp.name)
+                    HOME=self._temp.name, USERPROFILE=self._temp.name,
+                    PYTHONPATH=self._temp.name + os.pathsep + _env()["PYTHONPATH"])
 
     def test_dry_run_starts_nothing_and_names_the_caller(self):
         result = _run(
@@ -147,6 +150,7 @@ class UseCommandTests(unittest.TestCase):
             self.assertIn("refusing to pass --act", result.stderr)
             self.assertFalse(self.log.exists(), args)
 
+    @unittest.skipUnless(os.name == "posix", "fake macOS executor")
     def test_arm_starts_recorder_without_act(self):
         result = _run(
             ["use", "--arm", "--target", "Notes", "--request", "count the windows"],
@@ -171,6 +175,7 @@ class UseCommandTests(unittest.TestCase):
         self.assertNotIn("--act", argv)
         print("armed recorder argv has no --act; decision_maker is caller")
 
+    @unittest.skipUnless(os.name == "posix", "fake macOS executor")
     def test_arm_without_jev_run_starts_nothing(self):
         empty = Path(self._temp.name) / "empty"
         empty.mkdir()
