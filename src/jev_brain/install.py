@@ -364,13 +364,21 @@ def _server_invocation(command, arguments, cwd, env):
         file = _resolve_program(command, cwd, search)
         if file is not None:
             identity = _file_is_server(file, cwd, search)
-            if identity is not False:
-                return identity
+            if identity is True:
+                return True
+            if identity is None:
+                wrappers_resolved = False
         if _declared_server(command) or _declared_server(str(cwd / command)):
             if scoped_search and file is None and "/" not in command.replace("\\", "/"):
                 return None
             return True
-        program = _program_name(str(file) if file else command)
+        invoked_as = _program_name(command)
+        program = _program_name(str(file)) if file else invoked_as
+        if invoked_as in {"env", "uv"} and invoked_as != program:
+            # Multicall binaries can dispatch by argv[0]. A positive inner
+            # identity preserves policy. An uncertain wrapper cannot clear it.
+            program = invoked_as
+            wrappers_resolved = False
         if program not in {"env", "uv"}:
             break
         wrappers_resolved &= file is not None

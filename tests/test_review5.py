@@ -249,6 +249,21 @@ class StartupTests(unittest.TestCase):
 
 
 class InstallerTests(unittest.TestCase):
+    def test_multicall_env_wrapper_preserves_positive_identity_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            suffix = ".exe" if os.name == "nt" else ""
+            multicall = cwd / ("coreutils" + suffix)
+            multicall.touch(mode=0o755)
+            (cwd / ("indexer" + suffix)).touch(mode=0o755)
+            for spelling, link in (("symlink", os.symlink), ("hardlink", os.link)):
+                bindir = cwd / spelling
+                bindir.mkdir()
+                link(multicall, bindir / ("env" + suffix))
+                search = os.pathsep.join((str(bindir), str(cwd)))
+                self.check_entry("env", search, cwd, "preserve", ["python", "-m", "jev_brain.mcp_server"])
+                self.check_entry("env", search, cwd, "refuse", ["indexer"])
+
     def test_python_module_alias_or_unresolved_module_never_adds_default(self):
         with tempfile.TemporaryDirectory() as tmp:
             cwd = Path(tmp)
