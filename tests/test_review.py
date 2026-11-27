@@ -12,6 +12,7 @@ import unittest
 from contextlib import redirect_stdout
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from test_cli import ROOT
@@ -28,7 +29,7 @@ class GateReviewTests(unittest.TestCase):
         self.observe = self.enterContext(patch.object(foreground, "current", return_value=self.front))
         self.enterContext(patch.object(gate, "_observe", side_effect=lambda deadline: foreground.current(),
                                       create=True))
-        self.enterContext(patch.object(sys, "platform", "darwin"))
+        self.enterContext(patch.object(gate, "sys", SimpleNamespace(platform="darwin", executable=sys.executable)))
 
     def test_arm_preflights_actual_mail_and_focused_metadata(self):
         for field, value in [("app", "Mail"), ("field_role", "AXSecureTextField"),
@@ -74,7 +75,7 @@ class GateReviewTests(unittest.TestCase):
             self.assertEqual(set(json.loads(line)), {"time", "app", "outcome", "call", "length"})
 
     def test_windows_batch_is_refused_before_lookup(self):
-        with patch.object(sys, "platform", "win32"), patch.object(gate.shutil, "which") as lookup:
+        with patch.object(gate.sys, "platform", "win32"), patch.object(gate.shutil, "which") as lookup:
             lookup.return_value = "record.cmd"
             with self.assertRaises(gate.UseRefused):
                 gate.perform("Notes", "Review a & b", armed=True)

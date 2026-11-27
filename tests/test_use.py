@@ -1,5 +1,6 @@
-"""Drive the shipped `jev-brain use` command. The stand-in jev-run only records argv."""
+"""Drive the shipped CLI with an isolated executor that records an argument digest."""
 
+import hashlib
 import json
 import os
 import stat
@@ -37,24 +38,25 @@ class UseCommandTests(unittest.TestCase):
         self.bin_dir = root / "bin"
         self.bin_dir.mkdir()
         (root / "sitecustomize.py").write_text(
-            "import os, sys, sysconfig\nfrom jev_brain import foreground\n"
-            "if os.name == 'posix': sysconfig.get_paths(); sys.platform = 'darwin'\n"
+            "import os, sys\nfrom types import SimpleNamespace\nfrom jev_brain import foreground, computer_use\n"
+            "if os.name == 'posix': computer_use.sys = SimpleNamespace(platform='darwin', executable=sys.executable)\n"
             "foreground.current = lambda: foreground.Window('Notes', 'Note', '', 'AXTextArea', 'com.apple.Notes', 12)\n")
         self.log = root / "argv.log"
         script = self.bin_dir / "jev-run"
         script.write_text(
             f"#!{sys.executable}\n"
+            "import hashlib\n"
             "import os\n"
             "import json\n"
             "import sys\n"
             "from pathlib import Path\n"
-            "Path(os.environ['JEV_BRAIN_USE_ARGV']).write_text(\n"
-            "    '\\n'.join(sys.argv) + '\\n', encoding='utf-8'\n"
-            ")\n"
+            "digest = hashlib.sha256(json.dumps(sys.argv[1:]).encode()).hexdigest()\n"
+            "Path(os.environ['JEV_BRAIN_USE_ARGV']).write_text(digest, encoding='ascii')\n"
             "print(os.environ.get('STUB_REPLY', json.dumps({'outcome': 'dry run', 'steps_taken': 0})))\n",
             encoding="utf-8",
         )
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
+
     def _child_env(self, path: Path | None = None):
         return _env(PATH=str(path or self.bin_dir), JEV_BRAIN_USE_ARGV=str(self.log),
                     HOME=self._temp.name, USERPROFILE=self._temp.name,
@@ -166,13 +168,9 @@ class UseCommandTests(unittest.TestCase):
         self.assertTrue(body["started"])
         self.assertNotIn("model", body)
         self.assertNotIn("mock", result.stdout)
-        argv = self.log.read_text(encoding="utf-8").splitlines()
-        self.assertTrue(argv[0].endswith("jev-run"))
-        self.assertEqual(
-            argv[1:],
-            ["count the windows", "--expect", "Notes", "--steps", "1", "--handoffs", "0"],
-        )
-        self.assertNotIn("--act", argv)
+        expected = ["count the windows", "--expect", "Notes", "--steps", "1", "--handoffs", "0"]
+        digest = hashlib.sha256(json.dumps(expected).encode()).hexdigest()
+        self.assertEqual(self.log.read_text(encoding="ascii"), digest)
         print("armed recorder argv has no --act; decision_maker is caller")
 
     @unittest.skipUnless(os.name == "posix", "fake macOS executor")

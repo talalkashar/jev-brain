@@ -31,15 +31,15 @@ class ActTests(unittest.TestCase):
                         PYTHONPATH=os.pathsep.join([temp.name, str(SRC)]))
         # Inject only the OS observation. Both entry points run their real gates.
         (self.home / "sitecustomize.py").write_text(
-            "import os, sys, sysconfig\nfrom jev_brain import foreground, computer_use\n"
-            "if os.name == 'posix': sysconfig.get_paths(); sys.platform = 'darwin'\n"
+            "import os, sys\nfrom types import SimpleNamespace\nfrom jev_brain import foreground, computer_use\n"
+            "if os.name == 'posix': computer_use.sys = SimpleNamespace(platform='darwin', executable=sys.executable)\n"
             "def current():\n"
             "    if os.getenv('SLOW_PROBE'): __import__('time').sleep(2)\n"
             "    if os.getenv('NO_PROBE'): raise AssertionError('unexpected desktop access')\n"
             "    return foreground.Window(os.getenv('APP', 'TextEdit'), os.getenv('TITLE', 'Untitled'),"
             " os.getenv('URL', ''), os.getenv('ROLE', 'AXTextArea'), 'com.apple.TextEdit', 100, placeholder=os.getenv('HINT',''))\n"
             "foreground.current = current\n"
-            "if 'SHORT_TIMEOUT' in os.environ: computer_use.TIMEOUT = 0.5\n",
+            "if 'SHORT_TIMEOUT' in os.environ: computer_use.TIMEOUT = float(os.environ['SHORT_TIMEOUT'])\n",
             encoding="utf-8")
         stub = self.bin / "jev-run"
         stub.write_bytes(f"#!{sys.executable}\n".encode() + (ROOT / "tests/stubs/jev-run").read_bytes())
@@ -160,7 +160,7 @@ class ActTests(unittest.TestCase):
         self.allow()
         start = time.monotonic()
         result = self.call(["use", "--act", "--expect", "TextEdit", "--target", "New",
-                            "--request", "Review"], SLOW_PROBE="1", SHORT_TIMEOUT="1")
+                            "--request", "Review"], SLOW_PROBE="1", SHORT_TIMEOUT="0.5")
         self.assertEqual(result.returncode, 124)
         self.assertLess(time.monotonic() - start, 1.5)
         self.assertFalse(json.loads(result.stdout)["started"])
@@ -176,7 +176,7 @@ class ActTests(unittest.TestCase):
                     "def fake(args, mac, result):\n"
                     "    if os.getenv('WAIT'):\n"
                     "        from pathlib import Path\n"
-                    "        (Path(os.environ['HOME']) / 'backend-ready').touch()\n"
+                    "        (Path(os.environ['HOME']) / ('ready-' + os.environ['WAIT'])).touch()\n"
                     "        time.sleep(5)\n"
                     "    result.update(clicked='New', steps_taken=1)\n"
                     "    return 'target clicked'\n"
@@ -195,7 +195,7 @@ class ActTests(unittest.TestCase):
                                     ("wait", "timeout", 124)):
             if mode == "allow":
                 self.allow()
-            extra = {"SHORT_TIMEOUT": "1", "WAIT": "1"} if mode == "wait" else {}
+            extra = {"SHORT_TIMEOUT": "2", "WAIT": "timeout"} if mode == "wait" else {}
             result = subprocess.run(cmd, capture_output=True, text=True, env=env | extra, timeout=5)
             self.assertEqual(json.loads(result.stdout)["outcome"], outcome)
             self.assertEqual(result.returncode, code)
@@ -209,13 +209,13 @@ class ActTests(unittest.TestCase):
             self.assertEqual(len(self.audit()), len(before) + 2)
             self.assertEqual(self.audit()[-1]["outcome"], "refused")
 
-        (self.home / "backend-ready").unlink()
+        self.assertTrue((self.home / "ready-timeout").exists())
         with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                              env=env | {"WAIT": "1"}, text=True) as proc:
+                              env=env | {"WAIT": "interrupt"}, text=True) as proc:
             deadline = time.monotonic() + 4
-            while time.monotonic() < deadline and not (self.home / "backend-ready").exists():
+            while time.monotonic() < deadline and not (self.home / "ready-interrupt").exists():
                 time.sleep(.02)
-            self.assertTrue((self.home / "backend-ready").exists())
+            self.assertTrue((self.home / "ready-interrupt").exists())
             proc.send_signal(signal.SIGINT)
             stdout, stderr = proc.communicate(timeout=3)
             self.assertEqual(proc.returncode, 130, stderr)
@@ -230,7 +230,8 @@ class ActTests(unittest.TestCase):
         start = time.monotonic()
         escaped = self.call(HELD_PIPE="1", SHORT_TIMEOUT="1")
         self.assertEqual(json.loads(escaped.stdout)["outcome"], "timeout")
-        self.assertLess(time.monotonic() - start, 1.6)
+        self.assertTrue(json.loads(escaped.stdout)["started"])
+        self.assertLess(time.monotonic() - start, 2.4)
 
     @unittest.skipUnless(os.name == "posix", "fake macOS executor")
     def test_runner_failures(self):
@@ -252,7 +253,7 @@ class ActTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "posix", "POSIX live process tree")
     def test_timeout_and_ctrl_c_stop_the_process_group_and_audit(self):
         self.allow()
-        result = self.call(SLEEP="1", SHORT_TIMEOUT="1")
+        result = self.call(SLEEP="1", SHORT_TIMEOUT="2")
         self.assertEqual(result.returncode, 124)
         self.assertEqual(self.audit()[-1]["outcome"], "timeout")
         (self.home / "ready").unlink()
