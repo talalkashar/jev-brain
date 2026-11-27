@@ -33,8 +33,14 @@ class ActTests(unittest.TestCase):
         (self.home / "sitecustomize.py").write_text(
             "import os, sys\nfrom types import SimpleNamespace\nfrom jev_brain import foreground, computer_use\n"
             "if os.name == 'posix': computer_use.sys = SimpleNamespace(platform='darwin', executable=sys.executable)\n"
+            # The foreground deadline test controls only AX latency. Slow durable
+            # writes have dedicated tests for the 'audit indeterminate' outcome.
+            "if os.getenv('SLOW_PROBE'): computer_use.local.append_audit = lambda *args: (1, 1)\n"
             "def current():\n"
-            "    if os.getenv('SLOW_PROBE'): __import__('time').sleep(2)\n"
+            "    if os.getenv('SLOW_PROBE'):\n"
+            "        from pathlib import Path\n"
+            "        (Path(os.environ['HOME']) / 'observing').touch()\n"
+            "        __import__('time').sleep(5)\n"
             "    if os.getenv('NO_PROBE'): raise AssertionError('unexpected desktop access')\n"
             "    return foreground.Window(os.getenv('APP', 'TextEdit'), os.getenv('TITLE', 'Untitled'),"
             " os.getenv('URL', ''), os.getenv('ROLE', 'AXTextArea'), 'com.apple.TextEdit', 100, placeholder=os.getenv('HINT',''))\n"
@@ -161,9 +167,10 @@ class ActTests(unittest.TestCase):
         self.allow()
         start = time.monotonic()
         result = self.call(["use", "--act", "--expect", "TextEdit", "--target", "New",
-                            "--request", "Review"], SLOW_PROBE="1", SHORT_TIMEOUT="0.5")
-        self.assertEqual(result.returncode, 124)
-        self.assertLess(time.monotonic() - start, 1.5)
+                            "--request", "Review"], SLOW_PROBE="1", SHORT_TIMEOUT="1")
+        self.assertEqual(result.returncode, 124, result.stdout)
+        self.assertLess(time.monotonic() - start, 3)
+        self.assertTrue((self.home / "observing").exists())
         self.assertFalse(json.loads(result.stdout)["started"])
         self.assertFalse((self.home / "calls").exists())
 
