@@ -39,6 +39,7 @@ class ActTests(unittest.TestCase):
             "    return foreground.Window(os.getenv('APP', 'TextEdit'), os.getenv('TITLE', 'Untitled'),"
             " os.getenv('URL', ''), os.getenv('ROLE', 'AXTextArea'), 'com.apple.TextEdit', 100, placeholder=os.getenv('HINT',''))\n"
             "foreground.current = current\n"
+            "foreground.target_metadata = lambda window, label, deadline: ('AXButton', '', label, '', '')\n"
             "if 'SHORT_TIMEOUT' in os.environ: computer_use.TIMEOUT = float(os.environ['SHORT_TIMEOUT'])\n",
             encoding="utf-8")
         stub = self.bin / "jev-run"
@@ -168,19 +169,16 @@ class ActTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "posix", "POSIX subprocess supervisor")
     def test_direct_runner_uses_audited_supervisor(self):
-        # Stub the backend before importing the public entry point in any interpreter.
-        setup = self.home / "sitecustomize.py"
-        with setup.open("a") as f:
-            f.write("import sys, types, time, jev_run\n"
-                    "sys.modules['typesafe_computer_use'] = types.SimpleNamespace(macos=object())\n"
-                    "def fake(args, mac, result):\n"
-                    "    if os.getenv('WAIT'):\n"
-                    "        from pathlib import Path\n"
-                    "        (Path(os.environ['HOME']) / ('ready-' + os.environ['WAIT'])).touch()\n"
-                    "        time.sleep(5)\n"
-                    "    result.update(clicked='New', steps_taken=1)\n"
-                    "    return 'target clicked'\n"
-                    "jev_run.perform = fake\n")
+        # Replace only the supervisor's backend command in the fixture process.
+        # The real isolated interpreter must never reach the desktop in this test.
+        fake = self.home / "test_backend.py"
+        fake.write_text("import os, time, json\nfrom pathlib import Path\n"
+                        "if os.getenv('WAIT'):\n"
+                        "    (Path(os.environ['HOME']) / ('ready-' + os.environ['WAIT'])).touch()\n"
+                        "    time.sleep(5)\n"
+                        "print(json.dumps(dict(clicked='New', steps_taken=1, outcome='target clicked')))\n")
+        with (self.home / "sitecustomize.py").open("a") as f:
+            f.write(f"computer_use.backend_command = lambda: [sys.executable, {str(fake)!r}]\n")
         env = self.env.copy()
         env["PYTHONPATH"] += os.pathsep + str(ROOT / "runner")
         try:

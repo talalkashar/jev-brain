@@ -27,8 +27,6 @@ class GateReviewTests(unittest.TestCase):
         self.run_child = self.enterContext(patch.object(gate, "_run", return_value=0))
         self.front = foreground.Window("TextEdit", "Untitled", "", "AXTextArea")
         self.observe = self.enterContext(patch.object(foreground, "current", return_value=self.front))
-        self.enterContext(patch.object(gate, "_observe", side_effect=lambda deadline: foreground.current(),
-                                      create=True))
         self.enterContext(patch.object(gate, "sys", SimpleNamespace(platform="darwin", executable=sys.executable)))
 
     def test_arm_preflights_actual_mail_and_focused_metadata(self):

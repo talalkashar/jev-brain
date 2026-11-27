@@ -2,6 +2,8 @@
 
 import ctypes as C
 import sys
+import time
+from collections.abc import Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass
 from urllib.parse import urlsplit
@@ -72,15 +74,71 @@ def _bundle_id(pid):
     get_app = C.CFUNCTYPE(ptr, ptr, ptr, C.c_int)(("objc_msgSend", objc))
     get_object = C.CFUNCTYPE(ptr, ptr, ptr)(("objc_msgSend", objc))
     get_bytes = C.CFUNCTYPE(C.c_char_p, ptr, ptr)(("objc_msgSend", objc))
-    app = get_app(cls(b"NSRunningApplication"), selector(b"runningApplicationWithProcessIdentifier:"), pid)
-    bundle = get_object(app, selector(b"bundleIdentifier"))
-    value = get_bytes(bundle, selector(b"UTF8String"))
-    if not value:
-        raise OSError("Could not identify the front application.")
-    return value.decode("utf-8")
+    pool = _function(objc, "objc_autoreleasePoolPush", ptr)()
+    try:
+        app = get_app(cls(b"NSRunningApplication"), selector(b"runningApplicationWithProcessIdentifier:"), pid)
+        bundle = get_object(app, selector(b"bundleIdentifier"))
+        value = get_bytes(bundle, selector(b"UTF8String"))
+        if not value:
+            raise OSError("Could not identify the front application.")
+        return value.decode("utf-8")
+    finally:
+        _function(objc, "objc_autoreleasePoolPop", None, ptr)(pool)
+
+
+class TargetUnavailable(ValueError):
+    def __init__(self, outcome="low confidence"):
+        super().__init__(outcome)
+        self.outcome = outcome
+
+
+def unique_target(root, label, children, attribute):
+    # Count every exposed reference, including overlapping elements. Repeated or
+    # cyclic subtrees may cause a conservative refusal at the traversal limit.
+    pending = [root]
+    visited = 0
+    match = None
+    while pending:
+        ref = pending.pop()
+        visited += 1
+        descendants = children(ref)
+        if descendants is None:  # AX explicitly reported unsupported or no value.
+            descendants = ()
+        if not isinstance(descendants, Sequence) or isinstance(descendants, (str, bytes, bytearray)):
+            raise TargetUnavailable()
+        if visited + len(pending) + len(descendants) > 512:
+            raise TargetUnavailable()
+        pending.extend(descendants)
+        names = (attribute(ref, "AXTitle"), attribute(ref, "AXDescription"))
+        if any(name is not None and not isinstance(name, str) for name in names):
+            raise TargetUnavailable()
+        if label in names:
+            if match is not None:
+                raise TargetUnavailable()
+            match = ref
+    if match is None:
+        raise TargetUnavailable("target not found")
+    return match
+
+
+def control_metadata(ref, label, attribute):
+    metadata = tuple(attribute(ref, key) for key in
+                     ("AXRole", "AXSubrole", "AXTitle", "AXDescription", "AXPlaceholderValue"))
+    if (any(v is not None and not isinstance(v, str) for v in metadata)
+            or not metadata[0] or not metadata[0].startswith("AX") or label not in metadata[2:4]):
+        raise TargetUnavailable()
+    return tuple(value or "" for value in metadata)
+
+
+def target_metadata(approved, label, deadline):
+    return _read(approved, label, deadline)[1]
 
 
 def current() -> Window:
+    return _read()[0]
+
+
+def _read(approved=None, label=None, deadline=None):
     if sys.platform != "darwin":
         raise OSError("Live input needs macOS.")
     ax, cf = C.CDLL(AX), C.CDLL(CF)
@@ -104,7 +162,12 @@ def current() -> Window:
                 refs.callback(release, ref)
             return ref
 
+        def check_time():
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError
+
         def attr(element, key):
+            check_time()
             value = ptr()
             name = owned(new_string(None, key.encode("ascii"), utf8))
             if not element or not name:
@@ -144,9 +207,44 @@ def current() -> Window:
             string(attr(field, "AXTitle")), string(attr(field, "AXPlaceholderValue")),
             string(attr(field, "AXDescription")),
         )
+        metadata = None
+        if label is not None:
+            if observed != approved:
+                raise ValueError("Foreground changed before target lookup.")
+            copy_children = _function(ax, "AXUIElementCopyAttributeValues", integer, ptr, ptr,
+                                      C.c_long, C.c_long, C.POINTER(ptr))
+            array_type = _function(cf, "CFArrayGetTypeID", C.c_ulong)()
+            element_type = _function(ax, "AXUIElementGetTypeID", C.c_ulong)()
+            count = _function(cf, "CFArrayGetCount", C.c_long, ptr)
+            item = _function(cf, "CFArrayGetValueAtIndex", ptr, ptr, C.c_long)
+            key = owned(new_string(None, b"AXChildren", utf8))
+            if not key:
+                raise OSError("Could not read accessibility children.")
+
+            def children(ref):
+                check_time()
+                array = ptr()
+                status = copy_children(ref, key, 0, 513, C.byref(array))
+                if status in (-25205, -25212):
+                    return []
+                if status or not array or type_id(owned(array)) != array_type or count(array) > 512:
+                    raise ValueError("Incomplete accessibility tree.")
+                children_refs = [item(array, i) for i in range(count(array))]
+                if any(not child or type_id(child) != element_type for child in children_refs):
+                    raise ValueError("Unreadable accessibility child.")
+                return children_refs
+
+            def attribute(ref, name):
+                return string(attr(ref, name))
+
+            match = unique_target(window, label, children, attribute)
+            owner = attr(match, "AXWindow")
+            if not owner or not equal(owner, window):
+                raise TargetUnavailable()
+            metadata = control_metadata(match, label, attribute)
         for owner, name, original in ((desktop, "AXFocusedApplication", app), (app, "AXFocusedWindow", window),
                                       (app, "AXFocusedUIElement", field)):
             latest = attr(owner, name)
             if not latest or not equal(latest, original):
                 raise OSError("Focus changed during observation.")
-        return observed
+        return observed, metadata

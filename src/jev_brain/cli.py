@@ -127,7 +127,7 @@ def _parser() -> argparse.ArgumentParser:
     use = sub.add_parser("use", allow_abbrev=False, help="preview or perform one screen action")
     use.add_argument("--target", default="", help="exact control label, or 'focused field' for text")
     use.add_argument("--request", default="", help="one sub-goal for jev")
-    use.add_argument("--expect", default="", help="frontmost app name or exact browser URL")
+    use.add_argument("--expect", default="", help="frontmost supported native app name")
     use.add_argument("--text", help="literal text to enter")
     mode = use.add_mutually_exclusive_group()
     mode.add_argument("--arm", action="store_true", help="run one executor preview without input")

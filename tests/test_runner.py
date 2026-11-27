@@ -29,6 +29,8 @@ class RunnerTests(unittest.TestCase):
         def attribute(ref, key, _):
             if key == "AXChildren":
                 return 0, self.buttons if ref == self.window else []
+            if key == "AXRole":
+                return 0, "AXButton" if ref in self.buttons else "AXWindow"
             if key == "AXTitle":
                 return 0, "New" if ref in self.buttons else "Window"
             return -25205, None
@@ -64,12 +66,31 @@ class RunnerTests(unittest.TestCase):
 
     def test_type_only_into_empty_field_and_read_back(self):
         self.args.target, self.args.text = None, "Hello"
-        self.mac.ax_value.side_effect = ["already occupied", "", "Hello"]
+        self.mac.ax_value.side_effect = ["already occupied", "", "", "Hello"]
         self.assertEqual(self.run_step(), "text not typed")
         self.mac.ax_set_value.assert_not_called()
         self.assertEqual(self.run_step(), "text typed")
         self.mac.ax_set_value.assert_called_once_with(self.field, "Hello")
         self.assertEqual(self.result["typed"], "Hello")
+
+    def test_intervening_edit_or_unreadable_field_stops_setter_after_focus_recheck(self):
+        self.args.target, self.args.text = None, "Hello"
+        for act in (False, True):
+            for changed in ("human draft", None):
+                with self.subTest(act=act, changed=changed):
+                    value = ""
+                    def check(expect):
+                        nonlocal value
+                        if self.mac.ax_value.call_count:
+                            value = changed
+                        return self.front
+                    self.observe.side_effect = check
+                    self.mac.ax_value.reset_mock()
+                    self.mac.ax_value.side_effect = lambda ref: value
+                    self.args.act = act
+                    self.assertEqual(self.run_step(), "text not typed")
+                    self.assertEqual(self.result["steps_taken"], 0)
+                    self.mac.ax_set_value.assert_not_called()
 
     def test_preview_and_sensitive_field_never_type(self):
         self.args.text = "Hello"
@@ -114,6 +135,12 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(self.run_step(), "low confidence")
         self.mac.ax_press.assert_not_called()
 
+    def test_unreadable_children_cannot_prove_button_uniqueness(self):
+        attribute = self.mac.AS.AXUIElementCopyAttributeValue.side_effect
+        self.mac.AS.AXUIElementCopyAttributeValue.side_effect = lambda ref, key, out: (
+            (0, "") if ref == self.control and key == "AXChildren" else attribute(ref, key, out))
+        self.assertEqual(self.run_step(), "low confidence")
+        self.mac.ax_press.assert_not_called()
 
     def test_pinned_walker_collapses_two_distinct_save_buttons(self):
         try:

@@ -22,7 +22,7 @@ def private_file(name, flags):
     if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or
             (os.name == "posix" and (info.st_uid != os.getuid() or info.st_mode & 0o077))):
         os.close(fd)
-        raise OSError(f"{name} must be a private, user-owned regular file (mode 600).")
+        raise OSError(f"{name} must be a private, user-owned regular file with no group or other permissions. New files use 0600.")
     return fd
 
 
@@ -51,3 +51,27 @@ def audit(fd, record, outcome):
     if os.write(fd, data) != len(data):
         raise OSError("Incomplete audit write.")
     os.fsync(fd)
+
+
+def append_audit(record, outcome, identity=None):
+    root = directory()
+    flags = os.O_APPEND | os.O_WRONLY
+    if identity is None:
+        flags |= os.O_CREAT
+    fd = private_file("audit.jsonl", flags)
+    try:
+        info = os.fstat(fd)
+        current = (info.st_dev, info.st_ino)
+        if identity is not None and current != identity:
+            raise OSError("The audit file changed during the call.")
+        audit(fd, record, outcome)
+        if identity is None and os.name == "posix":
+            # Confirm the directory entry as well when the initial append created the file.
+            parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(parent)
+            finally:
+                os.close(parent)
+        return current
+    finally:
+        os.close(fd)

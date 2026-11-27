@@ -12,9 +12,11 @@ import signal
 import subprocess
 import sys
 import sysconfig
+import threading
 import time
 import unicodedata
 import uuid
+from concurrent.futures import Future
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -59,7 +61,7 @@ _SURFACES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "admin consoles",
         re.compile(
-            r"\b(admin(?:istrator)?\s+consoles?|admin\b|console\.cloud\.google|cloud\s+console|"
+            r"\b(admin(?:istrator)?\s+consoles?|admin\b|(?:console|portal|dashboard|dash|management)\.[a-z0-9-]+\.|cloud\s+console|"
             r"supabase\.com/dashboard|dashboard\.render\.com|console\.anthropic|platform\.openai|"
             r"console\.typesafe)",
             re.I,
@@ -101,17 +103,23 @@ def sensitive_surface(*parts: str) -> str | None:
     return None
 
 
+def sensitive_control(role, subrole, *labels):
+    roles = unicodedata.normalize("NFKC", role + subrole).casefold()
+    return "secure" in roles or sensitive_surface(role, subrole, *labels)
+
+
 def check_window(expect, window=None):
     try:
         if window is None:
             window = foreground.current()
-        roles = unicodedata.normalize("NFKC", window.field_role + window.field_subrole).casefold()
-        if ("secure" in roles or sensitive_surface(
-                window.app, window.bundle, window.title, window.document, window.field_role,
-                window.field_subrole, window.field_label, window.description, window.placeholder)):
+        if sensitive_control(window.field_role, window.field_subrole, window.app, window.bundle, window.title,
+                             window.document, window.field_label, window.description, window.placeholder):
             raise UseRefused("The front window is sensitive.", "sensitive")
         if not window.matches(expect):
             raise UseRefused("The front window does not match --expect.", "wrong window")
+        if window.bundle in foreground.BROWSERS:
+            # AXDocument can establish equality but cannot attest a safe origin.
+            raise UseRefused("Browser execution is disabled. No browser origins are approved.", "sensitive")
     except (OSError, ValueError, TypeError) as exc:
         raise UseRefused("Could not verify the front window.", "wrong window") from exc
     return window
@@ -131,14 +139,41 @@ def _remaining(deadline):
     return left
 
 
-def _capture(argv, deadline, body=None):
-    # Both the read-only probe and the executor use this absolute deadline.
+# A stuck OS read or storage call may finish later. Bound both waiting time
+# and outstanding work in long-lived MCP hosts. These threads never issue input.
+_io_slots = threading.BoundedSemaphore(4)
+
+
+def _bounded(deadline, operation, *args):
+    if not _io_slots.acquire(timeout=_remaining(deadline)):
+        raise TimeoutError
+    result = Future()
+
+    def work():
+        try:
+            _remaining(deadline)
+            result.set_result(operation(*args))
+        except BaseException as exc:
+            result.set_exception(exc)
+        finally:
+            _io_slots.release()
+
+    try:
+        threading.Thread(target=work, daemon=True).start()
+    except BaseException:
+        _io_slots.release()
+        raise
+    value = result.result(timeout=_remaining(deadline))
+    _remaining(deadline)
+    return value
+
+
+def _capture(argv, deadline, body):
     work_deadline = deadline - min(0.05, _remaining(deadline) / 10)
-    env = None if body is None else {**os.environ, "JEV_BRAIN_EXECUTOR_CHILD": "1"}
+    env = {**os.environ, "JEV_BRAIN_EXECUTOR_CHILD": "1"}
     proc = subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                             start_new_session=True)
-    if body is not None:
-        body.update(started=True, steps=None)
+    body.update(started=True, steps=None)
     try:
         output = bytearray()
         with selectors.DefaultSelector() as selector:
@@ -168,22 +203,6 @@ def _capture(argv, deadline, body=None):
             proc.wait(timeout=max(0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
             proc.poll()  # Popen also reaps outstanding children on later launches.
-
-
-def _observe(deadline):
-    # A native AX call can block in C. Only this read-only helper sees the
-    # desktop before the parent has approved an executor, and it can be killed.
-    probe = ("from dataclasses import asdict; import json; from jev_brain.foreground import current; "
-             "print(json.dumps(asdict(current())))")
-    try:
-        status, data = _capture([sys.executable, "-c", probe], deadline)
-        if status or not isinstance(data, dict):
-            raise ValueError
-        return foreground.Window(**data)
-    except (ValueError, TypeError, OSError) as exc:
-        if isinstance(exc, TimeoutError):
-            raise
-        raise UseRefused("Could not read the front window.", "wrong window") from exc
 
 
 def _run(argv, body, deadline, text):
@@ -231,7 +250,7 @@ def _run(argv, body, deadline, text):
 
 
 def backend_command():
-    return [sys.executable, "-c", "from jev_run import _backend; raise SystemExit(_backend())"]
+    return [sys.executable, "-I", "-c", "from jev_run import _backend; raise SystemExit(_backend())"]
 
 
 def _executor():
@@ -245,6 +264,30 @@ def _executor():
             and importlib.util.find_spec("jev_run") is not None):
         return backend_command()
     return [executable]
+
+
+def _prepare(act, bundled, expect, label, deadline):
+    if act and not local.consented():
+        raise UseRefused("Run jev-brain consent yourself in a local terminal first.")
+    if sys.platform != "darwin":
+        raise UseRefused("Executor-backed calls require macOS.")
+    if bundled and os.environ.get("JEV_BRAIN_EXECUTOR_CHILD"):
+        raise UseRefused("Install both packages in the same environment to run the bundled adapter.")
+    _remaining(deadline)
+    window = check_window(expect)
+    if label is not None:
+        try:
+            metadata = foreground.target_metadata(window, label, deadline)
+        except TimeoutError:
+            raise
+        except foreground.TargetUnavailable as exc:
+            raise UseRefused("Could not verify a unique target control.", exc.outcome) from exc
+        except (OSError, TypeError, ValueError) as exc:
+            raise UseRefused("Could not verify the target control.", "low confidence") from exc
+        if sensitive_control(*metadata):
+            raise UseRefused("The target control is sensitive.", "sensitive")
+    _remaining(deadline)
+    return (backend_command() if bundled else _executor()), window.bundle
 
 
 def _execute(body, parts, *, act, armed, text, deadline, record, bundled, limits):
@@ -271,18 +314,11 @@ def _execute(body, parts, *, act, armed, text, deadline, record, bundled, limits
     if act and target == "focused field" and text is None:
         raise UseRefused("A focused field requires --text.")
     if (act or bundled) and not expect.strip():
-        raise UseRefused("Supply --expect with an app name or exact URL.")
-    if act and not local.consented():
-        raise UseRefused("Run jev-brain consent yourself in a local terminal first.")
-    if sys.platform != "darwin":
-        raise UseRefused("Executor-backed calls require macOS.")
-    if bundled and os.environ.get("JEV_BRAIN_EXECUTOR_CHILD"):
-        raise UseRefused("Install both packages in the same environment to run the bundled adapter.")
-    command = backend_command() if bundled else _executor()
-    window = check_window(expect or target, _observe(deadline))
-    record["app"] = window.bundle  # matches() accepted a known, fixed bundle identifier.
+        raise UseRefused("Supply --expect with a supported native app name.")
+    label = target if expect and target != "focused field" else None
+    command, record["app"] = _bounded(deadline, _prepare, act, bundled, expect or target, label, deadline)
     argv = [*command, request, "--expect", expect or target, "--steps", "1", "--handoffs", "0"]
-    if expect and target != "focused field":
+    if label is not None:
         argv.extend(["--target", target])
     if text is not None:
         argv.extend(["--text", text])
@@ -303,31 +339,36 @@ def perform(target="", request="", armed=False, *, act=False, expect="", text=No
                 started=False, outcome="dry run", clicked=None, typed=None, confidence=None, steps=0)
     parts = [target, request, expect, text or ""]
     record = {"call": uuid.uuid4().hex[:16], "app": None, "length": sum(map(len, parts))}
-    fd = None
-    try:
-        if act:
-            fd = local.private_file("audit.jsonl", os.O_APPEND | os.O_CREAT | os.O_WRONLY)
-            local.audit(fd, record, "requested")
+    # Leave part of the same deadline available to confirm the final audit.
+    work_deadline = deadline - min(.25, TIMEOUT / 10) if act else deadline
+    if act:
         try:
-            code = _execute(body, parts, act=act, armed=armed, text=text, deadline=deadline,
-                            record=record, bundled=_bundled, limits=(steps, handoffs))
-        except UseRefused as exc:
-            if not act:
-                raise
-            body.update(outcome=exc.outcome, error=str(exc))
-            code = 2
-        except (TimeoutError, subprocess.TimeoutExpired):
-            body.update(outcome="timeout")
-            code = 124
-        except KeyboardInterrupt:
-            body.update(outcome="interrupted")
-            code = 130
-        if fd is not None:
-            local.audit(fd, record, body["outcome"])
-    except OSError as exc:
-        body.update(outcome="audit error", error=f"Could not record the act call: {exc}")
+            identity = _bounded(work_deadline, local.append_audit, record.copy(), "requested")
+        except (TimeoutError, KeyboardInterrupt):
+            body.update(outcome="audit indeterminate", error="Initial audit durability is unknown.")
+            return 2, body
+        except OSError:
+            body.update(outcome="audit error", error="Could not record the act call.")
+            return 2, body
+    try:
+        code = _execute(body, parts, act=act, armed=armed, text=text, deadline=work_deadline,
+                        record=record, bundled=_bundled, limits=(steps, handoffs))
+    except UseRefused as exc:
+        if not act:
+            raise
+        body.update(outcome=exc.outcome, error=str(exc))
         code = 2
-    finally:
-        if fd is not None:
-            os.close(fd)
+    except (TimeoutError, subprocess.TimeoutExpired):
+        body.update(outcome="timeout")
+        code = 124
+    except KeyboardInterrupt:
+        body.update(outcome="interrupted")
+        code = 130
+    if act:
+        try:
+            _bounded(deadline, local.append_audit, record.copy(), body["outcome"], identity)
+        except (OSError, KeyboardInterrupt):
+            body.update(step_outcome=body["outcome"], outcome="audit indeterminate",
+                        error="Final audit durability is unknown. Inspect the result before retrying.")
+            return 2, body
     return code, body

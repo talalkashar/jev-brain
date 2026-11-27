@@ -6,8 +6,10 @@ that plan or writes those files. Nothing is written unless `yes` is true.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
+import re
 import stat
 import tomllib
 from dataclasses import dataclass
@@ -211,24 +213,90 @@ def _upsert_json(existing: str | None) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
 
-def _has_server_policy(servers, config):
-    if "jev-brain" in servers or "systemone" in servers:
-        return True
-    return _references_server(config)
+_NAMES = {"systemone", "jev-brain"}
+_COMMANDS = {name + "-mcp" for name in _NAMES}
+_POLICY_FIELDS = {
+    "disabledMcpServers", "enabledMcpServers", "disabledMcpjsonServers", "enabledMcpjsonServers",
+    "allowedMcpServers", "deniedMcpServers", "allowedTools", "disallowedTools", "disabledTools",
+}
+_POLICY_NAMES = _NAMES | _COMMANDS | {
+    f"mcp__{name}{suffix}" for name in _NAMES for suffix in ("", "__use", "__decide", "__health")
+}
+
+
+def _program_name(path):
+    name = path.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+    return name.removesuffix(".exe")
+
+
+def _existing_server(servers):
+    if not isinstance(servers, dict):
+        raise InstallError("Cannot identify the MCP server entries.")
+    for name, entry in servers.items():
+        if name in _NAMES:
+            return True
+        command = entry.get("command") if isinstance(entry, dict) else None
+        if not isinstance(command, str):
+            continue
+        program = _program_name(command)
+        if program in _COMMANDS:
+            return True
+        args = entry.get("args", [])
+        if not isinstance(args, list):
+            continue
+        if re.fullmatch(r"python(?:\d+(?:\.\d+)*)?|py", program):
+            if any(arg == "-m" and module in ("systemone.mcp_server", "jev_brain.mcp_server")
+                   for arg, module in zip(args, args[1:])):
+                return True
+        if program in {"env", "uv", "uvx", "pipx"} and any(
+            isinstance(arg, str) and _program_name(arg) in _COMMANDS for arg in args
+        ):
+            raise InstallError("A wrapped MCP server command requires manual installation.")
+    return False
 
 
 def _references_server(value):
-    # A disabled-server list or agent-specific policy can live outside the
-    # server table. Preserve the server name those restrictions apply to.
+    # Inspect values only inside a recognized policy, never server arguments or env.
     if isinstance(value, dict):
         return any(_references_server(k) or _references_server(v) for k, v in value.items())
     if isinstance(value, list):
         return any(_references_server(item) for item in value)
     if not isinstance(value, str):
         return False
-    value = value.casefold()
-    return (value in ("systemone", "jev-brain", "systemone-mcp", "jev-brain-mcp")
-            or "mcp__systemone__" in value or "mcp__jev-brain__" in value)
+    pattern = value.casefold()
+    return (any(pattern.startswith(f"mcp__{name}__") for name in _NAMES)
+            or any(fnmatch.fnmatchcase(name, pattern) for name in _POLICY_NAMES))
+
+
+def _check_policy(scope):
+    for key in _POLICY_FIELDS.intersection(scope):
+        value = scope[key]
+        if key == "allowedMcpServers" or not isinstance(value, (list, dict)) or _references_server(value):
+            raise InstallError(f"Existing MCP policy in {key} requires manual installation.")
+    permissions = scope.get("permissions", {})
+    if not isinstance(permissions, dict):
+        raise InstallError("Cannot verify the permissions policy. Install manually.")
+    for key in ("allow", "deny", "ask"):
+        rules = permissions.get(key, [])
+        if not isinstance(rules, list) or _references_server(rules):
+            raise InstallError(f"Existing permissions.{key} policy requires manual installation.")
+
+
+def _has_server_policy(servers, config):
+    if _existing_server(servers):
+        return True
+    _check_policy(config)
+    for key in ("projects", "profiles"):
+        groups = config.get(key, {})
+        if not isinstance(groups, dict):
+            raise InstallError(f"Cannot verify MCP policy in {key}. Install manually.")
+        for group in groups.values():
+            if not isinstance(group, dict):
+                raise InstallError(f"Cannot verify MCP policy in {key}. Install manually.")
+            _check_policy(group)
+            if any(_existing_server(group.get(field, {})) for field in ("mcpServers", "mcp_servers")):
+                raise InstallError(f"Existing MCP server in {key} requires manual installation.")
+    return False
 
 
 def _upsert_toml(existing: str) -> str:

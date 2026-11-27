@@ -72,7 +72,7 @@ TOOLS = [
     },
     {
         "name": "use",
-        "description": "Preview one step. For input, supply act=true, the expected front app or exact URL, "
+        "description": "Preview one step. For input, supply act=true, the expected native app name, "
                        "and an exact control label or 'focused field' for text.",
         "inputSchema": {
             "type": "object", "required": ["target", "request"], "additionalProperties": False,
@@ -253,7 +253,7 @@ def _error(request_id: object, code: int, message: str) -> dict:
 
 
 def _write(payload: dict) -> None:
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+    sys.stdout.write(json.dumps(payload, ensure_ascii=True, separators=(",", ":")))
     sys.stdout.write("\n")
     sys.stdout.flush()
 

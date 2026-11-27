@@ -3,7 +3,8 @@
 import argparse
 import json
 
-from jev_brain.computer_use import UseRefused, check_window, sensitive_surface
+from jev_brain import foreground
+from jev_brain.computer_use import UseRefused, check_window, sensitive_control, sensitive_surface
 from jev_brain.computer_use import perform as supervised
 
 
@@ -17,32 +18,12 @@ def _attribute(mac, ref, key):
 
 
 def _unique_button(mac, window, label):
-    # The upstream walker merges equal frames. Traverse the raw AXChildren of
-    # this window, counting even offscreen names before testing visibility.
-    pending = [window]
-    seen = set()
-    match = None
-    while pending:
-        ref = pending.pop()
-        if ref in seen:
-            continue
-        seen.add(ref)
-        if len(seen) > 512:
-            return None, "low confidence"
-        children = _attribute(mac, ref, "AXChildren")
-        if children is not None:
-            if len(pending) + len(children) > 512:
-                return None, "low confidence"
-            pending.extend(children)
-        labels = [_attribute(mac, ref, key) for key in ("AXTitle", "AXDescription")]
-        if any(value is not None and not isinstance(value, str) for value in labels):
-            return None, "low confidence"
-        if label in labels:
-            if match is not None:
-                return None, "low confidence"
-            match = ref
-    if match is None:
-        return None, "target not found"
+    try:
+        match = foreground.unique_target(window, label,
+                                         lambda ref: _attribute(mac, ref, "AXChildren"),
+                                         lambda ref, key: _attribute(mac, ref, key))
+    except foreground.TargetUnavailable as exc:
+        return None, exc.outcome
     frame = mac._ax_frame(match)
     actions = mac._ax_actions(match)
     if not frame or min(frame[2:]) <= 0 or "AXPress" not in actions:
@@ -80,13 +61,11 @@ def perform(args, mac, result):
         if refusal:
             return refusal
         recheck(ref)
-        metadata = [_attribute(mac, ref, key) for key in ("AXTitle", "AXDescription", "AXSubrole",
-                                                           "AXRole", "AXPlaceholderValue")]
-        if any(value is not None and not isinstance(value, str) for value in metadata):
-            return "low confidence"
-        if args.target not in metadata[:2]:
-            return "low confidence"
-        if sensitive_surface(*(value for value in metadata if value)):
+        try:
+            metadata = foreground.control_metadata(ref, args.target, lambda ref, key: _attribute(mac, ref, key))
+        except foreground.TargetUnavailable as exc:
+            return exc.outcome
+        if sensitive_control(*metadata):
             return "sensitive"
         if args.act:
             result["steps_taken"] = None
@@ -106,6 +85,8 @@ def perform(args, mac, result):
         recheck(field.ref)
         if mac._ax_attr(app_ref, "AXFocusedUIElement") != field.ref:
             return "wrong window"
+        if mac.ax_value(field.ref) != "":
+            return "text not typed"
         if args.act:
             result["steps_taken"] = None
             if not mac.ax_set_value(field.ref, args.text):
