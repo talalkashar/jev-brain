@@ -17,6 +17,9 @@ sys.path.pop(0)
 class RunnerTests(unittest.TestCase):
     def setUp(self):
         self.mac = Mock()
+        self.press = self.mac.AS.AXUIElementPerformAction
+        self.write = self.mac.AS.AXUIElementSetAttributeValue
+        self.press.return_value = self.write.return_value = 0
         self.app = object()
         self.window = object()
         self.control = object()
@@ -46,23 +49,25 @@ class RunnerTests(unittest.TestCase):
         self.result = dict(clicked=None, typed=None, steps_taken=0)
 
     def run_step(self):
-        return jev_run.perform(self.args, self.mac, self.result)
+        metadata = ("AXButton", "", self.args.target, "", "") if self.args.target else None
+        approval = (jev_run.fingerprint(self.front), jev_run.fingerprint(metadata))
+        return jev_run.perform(self.args, self.mac, self.result, approval)
 
     def test_exact_control_and_ambiguous_target(self):
         self.assertEqual(self.run_step(), "target clicked")
-        self.mac.ax_press.assert_called_once_with(self.control)
+        self.press.assert_called_once_with(self.control, self.mac.AX_PRESS)
         self.buttons.append(object())
         self.assertEqual(self.run_step(), "low confidence")
         self.buttons.clear()
         self.assertEqual(self.run_step(), "target not found")
-        self.assertEqual(self.mac.ax_press.call_count, 1)
+        self.assertEqual(self.press.call_count, 1)
 
     def test_focus_changes_between_lookup_and_input(self):
         self.observe.side_effect = [self.front, Window("Finder", "Untitled", "", "")]
         with self.assertRaises(UseRefused) as exc:
             self.run_step()
         self.assertEqual(exc.exception.outcome, "wrong window")
-        self.mac.ax_press.assert_not_called()
+        self.press.assert_not_called()
 
     def test_press_revalidates_focus_ownership_and_hit_after_final_metadata_read(self):
         read = self.mac.AS.AXUIElementCopyAttributeValue
@@ -89,16 +94,16 @@ class RunnerTests(unittest.TestCase):
                 except UseRefused as exc:
                     outcome = exc.outcome
                 self.assertEqual(outcome, "low confidence" if change == "obscured" else "wrong window")
-                self.mac.ax_press.assert_not_called()
+                self.press.assert_not_called()
                 self.assertEqual(self.result["steps_taken"], 0)
 
     def test_type_only_into_empty_field_and_read_back(self):
         self.args.target, self.args.text = None, "Hello"
-        self.mac.ax_value.side_effect = ["already occupied", "", "", "Hello"]
+        self.mac.ax_value.side_effect = ["already occupied", "", "", "", "Hello"]
         self.assertEqual(self.run_step(), "text not typed")
-        self.mac.ax_set_value.assert_not_called()
+        self.write.assert_not_called()
         self.assertEqual(self.run_step(), "text typed")
-        self.mac.ax_set_value.assert_called_once_with(self.field, "Hello")
+        self.write.assert_called_once_with(self.field, self.mac.AS.kAXValueAttribute, "Hello")
         self.assertEqual(self.result["typed"], "Hello")
 
     def test_intervening_edit_or_unreadable_field_stops_setter_after_focus_recheck(self):
@@ -118,7 +123,7 @@ class RunnerTests(unittest.TestCase):
                     self.args.act = act
                     self.assertEqual(self.run_step(), "text not typed")
                     self.assertEqual(self.result["steps_taken"], 0)
-                    self.mac.ax_set_value.assert_not_called()
+                    self.write.assert_not_called()
 
     def test_preview_and_sensitive_field_never_type(self):
         self.args.text = "Hello"
@@ -126,19 +131,19 @@ class RunnerTests(unittest.TestCase):
         self.mac.ax_value.return_value = ""
         self.args.act = False
         self.assertEqual(self.run_step(), "dry run")
-        self.mac.ax_press.assert_not_called()
+        self.press.assert_not_called()
         self.args.target = None
         self.args.act = True
         self.mac.focused_field.return_value.placeholder = "Password"
         self.assertEqual(self.run_step(), "sensitive")
-        self.mac.ax_set_value.assert_not_called()
+        self.write.assert_not_called()
 
     def test_combined_press_and_text_refused_before_either_mutation(self):
         self.args.text = "Hello"
         self.mac.ax_value.side_effect = ["", "Hello"]
         self.assertEqual(self.run_step(), "refused")
-        self.mac.ax_press.assert_not_called()
-        self.mac.ax_set_value.assert_not_called()
+        self.press.assert_not_called()
+        self.write.assert_not_called()
         self.assertEqual(self.result["steps_taken"], 0)
 
     def test_overlapping_refs_hidden_by_upstream_deduplication(self):
@@ -149,7 +154,7 @@ class RunnerTests(unittest.TestCase):
         # The pinned walker returns just the first button for identical frames.
         self.mac.actionable_elements.return_value = ([SimpleNamespace(label="New", ref=self.control)], [], False)
         self.assertEqual(self.run_step(), "low confidence")
-        self.mac.ax_press.assert_not_called()
+        self.press.assert_not_called()
 
 
     def test_capped_nonpressable_and_obscured_candidates_refused(self):
@@ -161,14 +166,14 @@ class RunnerTests(unittest.TestCase):
         self.mac._ax_actions.return_value = ["AXPress"]
         self.mac.AS.AXUIElementCopyElementAtPosition.return_value = (0, self.field)
         self.assertEqual(self.run_step(), "low confidence")
-        self.mac.ax_press.assert_not_called()
+        self.press.assert_not_called()
 
     def test_unreadable_children_cannot_prove_button_uniqueness(self):
         attribute = self.mac.AS.AXUIElementCopyAttributeValue.side_effect
         self.mac.AS.AXUIElementCopyAttributeValue.side_effect = lambda ref, key, out: (
             (0, "") if ref == self.control and key == "AXChildren" else attribute(ref, key, out))
         self.assertEqual(self.run_step(), "low confidence")
-        self.mac.ax_press.assert_not_called()
+        self.press.assert_not_called()
 
     def test_pinned_walker_collapses_two_distinct_save_buttons(self):
         try:
@@ -191,4 +196,4 @@ class RunnerTests(unittest.TestCase):
             (0, self.buttons if ref == self.window else []) if key == "AXChildren" else
             (0, attrs(ref)[1]) if key == "AXTitle" else (-25205, None))
         self.assertEqual(self.run_step(), "low confidence")
-        self.mac.ax_press.assert_not_called()
+        self.press.assert_not_called()

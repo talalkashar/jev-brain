@@ -185,8 +185,11 @@ def _tools_call(request_id: object, params: object) -> dict:
             return _error(request_id, -32602, "Invalid use arguments")
         try:
             code, body = perform(**arguments)
-        except (UseRefused, OSError) as exc:
-            return _result(request_id, _tool_text(str(exc), is_error=True))
+        except UseRefused as exc:
+            code, body = 2, {"outcome": exc.outcome, "error": str(exc), "started": False, "steps": 0}
+        except OSError:
+            code, body = 3, {"outcome": "runner error", "error": "Could not confirm the executor state.",
+                             "started": None, "steps": None}
         result = _tool_text(json.dumps(body, ensure_ascii=False), is_error=code != 0)
         result["structuredContent"] = body
         return _result(request_id, result)

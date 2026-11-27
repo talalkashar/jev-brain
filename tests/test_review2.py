@@ -165,7 +165,7 @@ class ParentReviewTests(unittest.TestCase):
     def test_slow_final_audit_after_input_keeps_confirmed_step(self):
         local.grant()
 
-        def fake_input(argv, body, deadline, text):
+        def fake_input(argv, body, deadline, text, approval):
             body.update(started=True, outcome="text typed", steps=1, typed=text)
             return 0
 

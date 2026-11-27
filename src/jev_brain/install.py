@@ -13,7 +13,7 @@ import re
 import stat
 import tomllib
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 AGENTS = ("claude-code", "cursor", "codex")
 
@@ -230,14 +230,40 @@ def _program_name(path):
     return name.removesuffix(".exe")
 
 
-def _python_server(args, launcher):
+def _entry_point(path, cwd=None):
+    """Classify only the selected program or script, before its own arguments."""
+    if _program_name(path) in _COMMANDS:
+        return True
+    # A client or wrapper can supply its own working directory. Recognize the
+    # package-qualified spelling from any installation, including Windows paths.
+    if "$" in path or "%" in path or path.startswith("~"):
+        return None
+    entry = PurePosixPath(path.replace("\\", "/"))
+    if cwd:
+        entry = PurePosixPath(cwd.replace("\\", "/")) / entry
+    if entry.name.casefold() == "mcp_server.py" and entry.parent.name.casefold() in {"jev_brain", "systemone"}:
+        return True
+    # A local alias may point straight at a shipped file under a different name.
+    if Path(entry).is_absolute():
+        try:
+            resolved = Path(entry).resolve()
+        except (ValueError, RuntimeError, OSError):
+            return None
+        if resolved.name.casefold() == "mcp_server.py":
+            return True if resolved.parent.name.casefold() in {"jev_brain", "systemone"} else None
+        if _program_name(resolved.name) in _COMMANDS:
+            return True
+    return None if entry.name.casefold() == "mcp_server.py" else False
+
+
+def _python_server(args, launcher, cwd):
     """True for a server entry point, False for another program, None for an opaque invocation."""
     for arg in args:
         if arg == "--":
             script = next(args, None)
-            return _program_name(script) in _COMMANDS if script else None
+            return _entry_point(script, cwd) if script else None
         if not arg.startswith("-"):
-            return _program_name(arg) in _COMMANDS
+            return _entry_point(arg, cwd)
         if launcher == "py" and re.fullmatch(r"-(?:[23](?:\.\d+)?(?:-32|-64)?|V:.+)", arg):
             continue
         if arg == "--check-hash-based-pycs":
@@ -261,44 +287,53 @@ def _python_server(args, launcher):
     return None
 
 
-def _server_invocation(command, arguments):
+def _server_invocation(command, arguments, cwd):
     """Follow literal env and uv run commands without executing configuration."""
     program = _program_name(command)
     args = iter(arguments)
-    wrapped = False
+    changes_path = False
     while program in {"env", "uv"}:
-        wrapped = True
+        changes_path |= program == "uv"
         if program == "uv" and next(args, None) != "run":
             return None
         for arg in args:
             if arg == "--":
                 arg = next(args, "")
             elif program == "env" and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", arg):
+                changes_path |= arg.startswith("PATH=")
                 continue
             elif program == "uv":
-                option, equals, _ = arg.partition("=")
+                option, equals, value = arg.partition("=")
                 if option in {"--project", "--directory", "--python", "--with", "--package", "--group"}:
                     if not equals:
-                        next(args, None)
+                        value = next(args, None)
+                    if not value:
+                        return None
+                    if option == "--directory":
+                        cwd = str(PurePosixPath(cwd or ".") / value)
                     continue
                 if arg in {"--no-sync", "--frozen", "--locked", "--isolated", "--active", "--no-project"}:
                     continue
             if not arg or arg.startswith("-"):
                 return None
-            program = _program_name(arg)
+            command, program = arg, _program_name(arg)
             break
         else:
             return None
     if program in _COMMANDS:
-        return None if wrapped else True  # Preserve the existing manual review of wrapped console scripts.
+        # uv and PATH overrides can select a different environment's console script.
+        return None if changes_path and "/" not in command.replace("\\", "/") else True
+    identity = _entry_point(command, cwd)
+    if identity is not False:
+        return identity
     if re.fullmatch(r"pythonw?(?:\d+(?:\.\d+)*t?)?|py", program):
-        return _python_server(args, program)
+        return _python_server(args, program, cwd)
     if program.endswith((".py", ".pyw", ".pyz")):
         return False
     if program in {"uvx", "pipx", "poetry", "conda", "sh", "bash", "zsh", "fish", "cmd", "pwsh", "powershell"}:
         return None
     # An unfamiliar launcher with an explicit server operand may be a wrapper.
-    if any(arg in _MODULES or _program_name(arg) in _COMMANDS for arg in args):
+    if any(arg in _MODULES or _entry_point(arg, cwd) is not False for arg in args):
         return None
     return False
 
@@ -314,8 +349,10 @@ def _existing_server(servers):
             continue
         args = entry.get("args", []) if isinstance(entry, dict) else None
         identity = None
-        if isinstance(command, str) and command and isinstance(args, list) and all(isinstance(v, str) for v in args):
-            identity = _server_invocation(command, args)
+        cwd = entry.get("cwd", "") if isinstance(entry, dict) else None
+        if (isinstance(command, str) and command and isinstance(cwd, str)
+                and isinstance(args, list) and all(isinstance(v, str) for v in args)):
+            identity = _server_invocation(command, args, cwd)
         if identity is None:
             raise InstallError(f"Review MCP entry {ascii(name)} before installing. Its command may be a wrapped MCP server.")
         if identity:

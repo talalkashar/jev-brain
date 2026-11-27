@@ -245,8 +245,8 @@ def _read(approved=None, label=None, deadline=None):
             if not owner or not equal(owner, window):
                 raise TargetUnavailable()
             metadata = control_metadata(match, label, attribute)
-        for owner, name, original in ((desktop, "AXFocusedApplication", app), (app, "AXFocusedWindow", window),
-                                      (app, "AXFocusedUIElement", field)):
+        for owner, name, original in ((app, "AXFocusedUIElement", field), (app, "AXFocusedWindow", window),
+                                      (desktop, "AXFocusedApplication", app)):
             latest = attr(owner, name)
             if not latest or not equal(latest, original):
                 raise OSError("Focus changed during observation.")

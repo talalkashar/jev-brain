@@ -81,6 +81,8 @@ class DoctorTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "posix", "POSIX startup supervision")
 class StartupTests(unittest.TestCase):
+    approval = gate._Approval("Notes", None, foreground.Window("Notes", "Note", "", "AXTextArea"), None)
+
     def test_blocked_process_constructor_obeys_deadline(self):
         release = threading.Event()
         finished = threading.Event()
@@ -94,7 +96,7 @@ class StartupTests(unittest.TestCase):
             with patch.object(subprocess, "Popen", side_effect=missing):
                 start = time.monotonic()
                 with self.assertRaises(TimeoutError):
-                    gate._capture(["/absent"], start + .1, {})
+                    gate._capture(["/absent"], start + .1, {}, self.approval)
                 self.assertLess(time.monotonic() - start, .8)
         finally:
             release.set()
@@ -121,7 +123,7 @@ class StartupTests(unittest.TestCase):
                 with patch.object(subprocess, "Popen", side_effect=delayed_handle):
                     start = time.monotonic()
                     with self.assertRaises(TimeoutError):
-                        gate._capture(fake, start + .2, body)
+                        gate._capture(fake, start + .2, body, self.approval)
                     elapsed = time.monotonic() - start
             finally:
                 release.set()

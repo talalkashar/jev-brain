@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -18,6 +19,7 @@ import unicodedata
 import uuid
 from concurrent.futures import Future
 from contextlib import contextmanager
+from dataclasses import astuple, dataclass
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -174,16 +176,27 @@ def _bounded(deadline, operation, *args):
 _LAUNCHER = """\
 import os, select, sys, time
 deadline = float(sys.argv[1])
-os.write(1, b"R")
-readable, _, _ = select.select([0], [], [], max(0, deadline - time.monotonic()))
-if readable and os.read(0, 1) == b"G" and time.monotonic() < deadline:
+# Keep the status channel private to this helper. dup is close-on-exec.
+status = os.dup(2)
+with open(os.devnull, "wb") as sink:
+    os.dup2(sink.fileno(), 2)
+for ready, grant in ((b"R", b"G"), (b"D", b"X")):
+    os.write(status, ready)
+    readable, _, _ = select.select([0], [], [], max(0, deadline - time.monotonic()))
+    if not readable or os.read(0, 1) != grant or time.monotonic() >= deadline:
+        os.write(status, b"T")
+        sys.exit(1)
+try:
     os.execv(sys.argv[2], sys.argv[2:])
+except (OSError, ValueError):
+    os.write(status, b"E")
+    sys.exit(1)
 """
 _launch_slots = threading.BoundedSemaphore(4)
 
 
 @contextmanager
-def _launch(argv, work_deadline, deadline):
+def _launch(argv, work_deadline, deadline, approval):
     """The worker owns the child through reaping, even if Popen returns late."""
     ready = Future()
     release = threading.Event()
@@ -197,8 +210,9 @@ def _launch(argv, work_deadline, deadline):
         try:
             _remaining(work_deadline)
             command = [sys.executable, "-I", "-S", "-c", _LAUNCHER, str(work_deadline), *argv]
-            proc = subprocess.Popen(command, env=os.environ | {"JEV_BRAIN_EXECUTOR_CHILD": "1"},
-                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            env = os.environ | {"JEV_BRAIN_EXECUTOR_CHILD": "1", "JEV_BRAIN_APPROVAL": approval.stamp()}
+            proc = subprocess.Popen(command, env=env,
+                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     start_new_session=True)
         except BaseException as exc:
             ready.set_exception(exc)
@@ -228,24 +242,46 @@ def _launch(argv, work_deadline, deadline):
             reaped.wait(max(0, deadline - time.monotonic()))
 
 
-def _capture(argv, deadline, body):
+class _ExecFailed(OSError):
+    """The helper confirmed execv failed before the executor could start."""
+
+
+def _capture(argv, deadline, body, approval):
     work_deadline = deadline - min(0.05, _remaining(deadline) / 10)
-    with _launch(argv, work_deadline, deadline) as proc:
+    with _launch(argv, work_deadline, deadline, approval) as proc:
         output = bytearray()
         with selectors.DefaultSelector() as selector:
-            selector.register(proc.stdout, selectors.EVENT_READ)
-            if not selector.select(_remaining(work_deadline)):
-                raise TimeoutError
-            if os.read(proc.stdout.fileno(), 1) != b"R":
-                raise OSError("Executor launcher did not acknowledge startup.")
-            _remaining(work_deadline)
-            body.update(started=True, steps=None)
-            try:
-                os.write(proc.stdin.fileno(), b"G")
-            except OSError:
-                body.update(started=False, steps=0)
-                raise
+            selector.register(proc.stderr, selectors.EVENT_READ)
+
+            def status():
+                if not selector.select(_remaining(work_deadline)):
+                    raise TimeoutError
+                return os.read(proc.stderr.fileno(), 1)
+
+            for ready, grant in ((b"R", b"G"), (b"D", b"X")):
+                if status() != ready:
+                    raise OSError("Unexpected executor launcher status.")
+                _bounded(work_deadline, approval.recheck, work_deadline)
+                _remaining(work_deadline)
+                if grant == b"X":
+                    body.update(started=None, steps=None)
+                try:
+                    os.write(proc.stdin.fileno(), grant)
+                except OSError:
+                    body.update(started=False, steps=0)
+                    raise
             proc.stdin.close()
+            result = status()
+            if result in (b"E", b"T"):
+                body.update(started=False, steps=0)
+                if result == b"T":
+                    raise TimeoutError
+                raise _ExecFailed
+            if result:
+                raise OSError("Unexpected executor launcher status.")
+            selector.unregister(proc.stderr)
+            selector.register(proc.stdout, selectors.EVENT_READ)
+            body["started"] = True  # exec closed the helper's private status descriptor.
             while selector.select(_remaining(work_deadline)):
                 chunk = os.read(proc.stdout.fileno(), min(8192, MAX_OUTPUT + 1 - len(output)))
                 if not chunk:
@@ -255,12 +291,17 @@ def _capture(argv, deadline, body):
                     raise ValueError("Process output exceeds the byte limit.")
             else:
                 raise TimeoutError
-        return proc.wait(timeout=_remaining(work_deadline)), json.loads(output)
+        returncode = proc.wait(timeout=_remaining(work_deadline))
+        if returncode < 0 and not output:
+            # A signal could have closed the status descriptor just before exec.
+            body["started"] = None
+            raise OSError("Startup interrupted.")
+        return returncode, json.loads(output)
 
 
-def _run(argv, body, deadline, text):
+def _run(argv, body, deadline, text, approval):
     try:
-        status, data = _capture(argv, deadline, body)
+        status, data = _capture(argv, deadline, body, approval)
         if not isinstance(data, dict) or data.get("outcome") not in OUTCOMES:
             raise ValueError
         outcome = data["outcome"]
@@ -293,10 +334,13 @@ def _run(argv, body, deadline, text):
     except (ValueError, TypeError, RecursionError):
         body.update(outcome="runner error", error=f"Invalid or oversized jev-run result. {SETUP}")
         return 3
+    except _ExecFailed:
+        body.update(outcome="runner error", error=f"jev-run could not start. Check the executable and its interpreter. {SETUP}")
+        return 2
     except OSError as exc:
         if isinstance(exc, TimeoutError):
             raise
-        if body["started"]:
+        if body["started"] is not False:
             body.update(outcome="runner error", error="Lost contact with jev-run.")
             return 3
         raise UseRefused(f"jev-run could not be started. {SETUP}") from exc
@@ -319,15 +363,32 @@ def _executor():
     return [executable]
 
 
-def _prepare(act, bundled, expect, label, deadline):
-    if act and not local.consented():
-        raise UseRefused("Run jev-brain consent yourself in a local terminal first.")
-    if sys.platform != "darwin":
-        raise UseRefused("Executor-backed calls require macOS.")
-    if bundled and os.environ.get("JEV_BRAIN_EXECUTOR_CHILD"):
-        raise UseRefused("Install both packages in the same environment to run the bundled adapter.")
+def fingerprint(value):
+    """Compare observations across exec without exporting raw desktop metadata."""
+    if isinstance(value, foreground.Window):
+        value = astuple(value)
+    return hashlib.sha256(json.dumps(value, ensure_ascii=True).encode("ascii")).hexdigest()
+
+
+@dataclass(frozen=True)
+class _Approval:
+    expect: str
+    label: str | None
+    window: foreground.Window
+    metadata: tuple | None
+
+    def stamp(self):
+        return fingerprint(self.window) + ":" + fingerprint(self.metadata)
+
+    def recheck(self, deadline):
+        if _observe(self.expect, self.label, deadline) != self:
+            raise UseRefused("The approved window or target changed.", "wrong window")
+
+
+def _observe(expect, label, deadline):
     _remaining(deadline)
     window = check_window(expect)
+    metadata = None
     if label is not None:
         try:
             metadata = foreground.target_metadata(window, label, deadline)
@@ -339,8 +400,21 @@ def _prepare(act, bundled, expect, label, deadline):
             raise UseRefused("Could not verify the target control.", "low confidence") from exc
         if sensitive_control(*metadata):
             raise UseRefused("The target control is sensitive.", "sensitive")
+        if check_window(expect) != window:
+            raise UseRefused("The foreground changed during target lookup.", "wrong window")
     _remaining(deadline)
-    return (backend_command() if bundled else _executor()), window.bundle
+    return _Approval(expect, label, window, metadata)
+
+
+def _prepare(act, bundled, expect, label, deadline):
+    if act and not local.consented():
+        raise UseRefused("Run jev-brain consent yourself in a local terminal first.")
+    if sys.platform != "darwin":
+        raise UseRefused("Executor-backed calls require macOS.")
+    if bundled and os.environ.get("JEV_BRAIN_EXECUTOR_CHILD"):
+        raise UseRefused("Install both packages in the same environment to run the bundled adapter.")
+    approval = _observe(expect, label, deadline)
+    return (backend_command() if bundled else _executor()), approval
 
 
 def _execute(body, parts, *, act, armed, text, deadline, record, bundled, limits):
@@ -369,7 +443,8 @@ def _execute(body, parts, *, act, armed, text, deadline, record, bundled, limits
     if (act or bundled) and not expect.strip():
         raise UseRefused("Supply --expect with a supported native app name.")
     label = target if expect and target != "focused field" else None
-    command, record["app"] = _bounded(deadline, _prepare, act, bundled, expect or target, label, deadline)
+    command, approval = _bounded(deadline, _prepare, act, bundled, expect or target, label, deadline)
+    record["app"] = approval.window.bundle
     argv = [*command, request, "--expect", expect or target, "--steps", "1", "--handoffs", "0"]
     if label is not None:
         argv.extend(["--target", target])
@@ -377,7 +452,7 @@ def _execute(body, parts, *, act, armed, text, deadline, record, bundled, limits
         argv.extend(["--text", text])
     if act:
         argv.append("--act")
-    code = _run(argv, body, deadline, text)
+    code = _run(argv, body, deadline, text, approval)
     if code == 0 and body["outcome"] == "target clicked":
         body["clicked"] = target
     if code == 0 and body["outcome"] == "text typed":
