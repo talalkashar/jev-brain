@@ -213,6 +213,7 @@ class LocalTests(unittest.TestCase):
 
     def test_doctor_checks_permissions_without_requesting_them(self):
         with patch("sys.platform", "darwin"), patch("shutil.which", return_value="/fake/jev-run"), \
+                patch("sysconfig.get_path", return_value="/test/venv/bin"), \
                 patch.object(local, "consented", return_value=False):
             with patch.object(foreground, "permissions", return_value=(True, True)):
                 self.assertEqual(_doctor(), 0)
