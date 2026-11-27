@@ -215,6 +215,7 @@ def _upsert_json(existing: str | None) -> str:
 
 _NAMES = {"systemone", "jev-brain"}
 _COMMANDS = {name + "-mcp" for name in _NAMES}
+_MODULES = {"systemone.mcp_server", "jev_brain.mcp_server"}
 _POLICY_FIELDS = {
     "disabledMcpServers", "enabledMcpServers", "disabledMcpjsonServers", "enabledMcpjsonServers",
     "allowedMcpServers", "deniedMcpServers", "allowedTools", "disallowedTools", "disabledTools",
@@ -229,6 +230,79 @@ def _program_name(path):
     return name.removesuffix(".exe")
 
 
+def _python_server(args, launcher):
+    """True for a server entry point, False for another program, None for an opaque invocation."""
+    for arg in args:
+        if arg == "--":
+            script = next(args, None)
+            return _program_name(script) in _COMMANDS if script else None
+        if not arg.startswith("-"):
+            return _program_name(arg) in _COMMANDS
+        if launcher == "py" and re.fullmatch(r"-(?:[23](?:\.\d+)?(?:-32|-64)?|V:.+)", arg):
+            continue
+        if arg == "--check-hash-based-pycs":
+            next(args, None)
+            continue
+        if arg == "-" or arg.startswith("--"):
+            return None
+        # CPython accepts grouped flags and attached operands, e.g. -Immodule.
+        for index, flag in enumerate(arg[1:], start=2):
+            if flag in "bBdEiIOPqRsSuvx":
+                continue
+            if flag in "WXm":
+                value = arg[index:] or next(args, None)
+                if value is None:
+                    return None
+                if flag == "m":
+                    return value in _MODULES
+                break
+            # Inline code and unknown interpreter/launcher options need review.
+            return None
+    return None
+
+
+def _server_invocation(command, arguments):
+    """Follow literal env and uv run commands without executing configuration."""
+    program = _program_name(command)
+    args = iter(arguments)
+    wrapped = False
+    while program in {"env", "uv"}:
+        wrapped = True
+        if program == "uv" and next(args, None) != "run":
+            return None
+        for arg in args:
+            if arg == "--":
+                arg = next(args, "")
+            elif program == "env" and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", arg):
+                continue
+            elif program == "uv":
+                option, equals, _ = arg.partition("=")
+                if option in {"--project", "--directory", "--python", "--with", "--package", "--group"}:
+                    if not equals:
+                        next(args, None)
+                    continue
+                if arg in {"--no-sync", "--frozen", "--locked", "--isolated", "--active", "--no-project"}:
+                    continue
+            if not arg or arg.startswith("-"):
+                return None
+            program = _program_name(arg)
+            break
+        else:
+            return None
+    if program in _COMMANDS:
+        return None if wrapped else True  # Preserve the existing manual review of wrapped console scripts.
+    if re.fullmatch(r"pythonw?(?:\d+(?:\.\d+)*t?)?|py", program):
+        return _python_server(args, program)
+    if program.endswith((".py", ".pyw", ".pyz")):
+        return False
+    if program in {"uvx", "pipx", "poetry", "conda", "sh", "bash", "zsh", "fish", "cmd", "pwsh", "powershell"}:
+        return None
+    # An unfamiliar launcher with an explicit server operand may be a wrapper.
+    if any(arg in _MODULES or _program_name(arg) in _COMMANDS for arg in args):
+        return None
+    return False
+
+
 def _existing_server(servers):
     if not isinstance(servers, dict):
         raise InstallError("Cannot identify the MCP server entries.")
@@ -236,22 +310,16 @@ def _existing_server(servers):
         if name in _NAMES:
             return True
         command = entry.get("command") if isinstance(entry, dict) else None
-        if not isinstance(command, str):
+        if isinstance(entry, dict) and command is None and isinstance(entry.get("url"), str):
             continue
-        program = _program_name(command)
-        if program in _COMMANDS:
+        args = entry.get("args", []) if isinstance(entry, dict) else None
+        identity = None
+        if isinstance(command, str) and command and isinstance(args, list) and all(isinstance(v, str) for v in args):
+            identity = _server_invocation(command, args)
+        if identity is None:
+            raise InstallError(f"Review MCP entry {ascii(name)} before installing. Its command may be a wrapped MCP server.")
+        if identity:
             return True
-        args = entry.get("args", [])
-        if not isinstance(args, list):
-            continue
-        if re.fullmatch(r"python(?:\d+(?:\.\d+)*)?|py", program):
-            if any(arg == "-m" and module in ("systemone.mcp_server", "jev_brain.mcp_server")
-                   for arg, module in zip(args, args[1:])):
-                return True
-        if program in {"env", "uv", "uvx", "pipx"} and any(
-            isinstance(arg, str) and _program_name(arg) in _COMMANDS for arg in args
-        ):
-            raise InstallError("A wrapped MCP server command requires manual installation.")
     return False
 
 

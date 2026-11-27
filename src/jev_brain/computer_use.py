@@ -17,6 +17,7 @@ import time
 import unicodedata
 import uuid
 from concurrent.futures import Future
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -168,16 +169,83 @@ def _bounded(deadline, operation, *args):
     return value
 
 
+# The initial process can announce readiness but cannot run executor code on its
+# own. -I -S keeps site hooks and caller-controlled imports out of this handshake.
+_LAUNCHER = """\
+import os, select, sys, time
+deadline = float(sys.argv[1])
+os.write(1, b"R")
+readable, _, _ = select.select([0], [], [], max(0, deadline - time.monotonic()))
+if readable and os.read(0, 1) == b"G" and time.monotonic() < deadline:
+    os.execv(sys.argv[2], sys.argv[2:])
+"""
+_launch_slots = threading.BoundedSemaphore(4)
+
+
+@contextmanager
+def _launch(argv, work_deadline, deadline):
+    """The worker owns the child through reaping, even if Popen returns late."""
+    ready = Future()
+    release = threading.Event()
+    reaped = threading.Event()
+
+    def start():
+        if not _launch_slots.acquire(blocking=False):
+            ready.set_exception(UseRefused("All executor startup slots are in use."))
+            reaped.set()
+            return
+        try:
+            _remaining(work_deadline)
+            command = [sys.executable, "-I", "-S", "-c", _LAUNCHER, str(work_deadline), *argv]
+            proc = subprocess.Popen(command, env=os.environ | {"JEV_BRAIN_EXECUTOR_CHILD": "1"},
+                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                    start_new_session=True)
+        except BaseException as exc:
+            ready.set_exception(exc)
+        else:
+            with proc:
+                ready.set_result(proc)
+                release.wait()
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    # Darwin can return EPERM for a group whose leader is a zombie.
+                    if proc.poll() is None:
+                        proc.kill()
+                # Popen's context closes pipes without draining, then reaps.
+        finally:
+            _launch_slots.release()
+            reaped.set()
+
+    try:
+        threading.Thread(target=start, daemon=True).start()
+        yield ready.result(timeout=_remaining(work_deadline))
+    finally:
+        release.set()
+        if ready.done():
+            reaped.wait(max(0, deadline - time.monotonic()))
+
+
 def _capture(argv, deadline, body):
     work_deadline = deadline - min(0.05, _remaining(deadline) / 10)
-    env = {**os.environ, "JEV_BRAIN_EXECUTOR_CHILD": "1"}
-    proc = subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                            start_new_session=True)
-    body.update(started=True, steps=None)
-    try:
+    with _launch(argv, work_deadline, deadline) as proc:
         output = bytearray()
         with selectors.DefaultSelector() as selector:
             selector.register(proc.stdout, selectors.EVENT_READ)
+            if not selector.select(_remaining(work_deadline)):
+                raise TimeoutError
+            if os.read(proc.stdout.fileno(), 1) != b"R":
+                raise OSError("Executor launcher did not acknowledge startup.")
+            _remaining(work_deadline)
+            body.update(started=True, steps=None)
+            try:
+                os.write(proc.stdin.fileno(), b"G")
+            except OSError:
+                body.update(started=False, steps=0)
+                raise
+            proc.stdin.close()
             while selector.select(_remaining(work_deadline)):
                 chunk = os.read(proc.stdout.fileno(), min(8192, MAX_OUTPUT + 1 - len(output)))
                 if not chunk:
@@ -188,21 +256,6 @@ def _capture(argv, deadline, body):
             else:
                 raise TimeoutError
         return proc.wait(timeout=_remaining(work_deadline)), json.loads(output)
-    finally:
-        # An inherited pipe may outlive the child. Never drain it during cleanup.
-        proc.stdout.close()
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            # Darwin can return EPERM for a group whose leader is a zombie.
-            if proc.poll() is None:
-                proc.kill()
-        try:
-            proc.wait(timeout=max(0, deadline - time.monotonic()))
-        except subprocess.TimeoutExpired:
-            proc.poll()  # Popen also reaps outstanding children on later launches.
 
 
 def _run(argv, body, deadline, text):

@@ -33,8 +33,11 @@ def permissions():
     if sys.platform != "darwin":
         return False, False
     accessibility = _function(C.CDLL(AX), "AXIsProcessTrusted", C.c_bool)
-    recording = _function(C.CDLL(CG), "CGPreflightScreenCaptureAccess", C.c_bool)
-    return accessibility(), recording()
+    try:
+        recording = _function(C.CDLL(CG), "CGPreflightScreenCaptureAccess", C.c_bool)()
+    except (AttributeError, OSError):
+        recording = False
+    return accessibility(), recording
 
 
 @dataclass(frozen=True)

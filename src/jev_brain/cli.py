@@ -241,11 +241,12 @@ def _doctor() -> int:
         accessibility, recording = foreground.permissions()
     except (AttributeError, OSError):
         accessibility = recording = False
-    for label, granted in (("Accessibility", accessibility), ("Screen Recording", recording)):
-        print(f"{label}: " + ("granted" if granted else
-              "missing or unavailable. Check System Settings > Privacy & Security for this host."))
+    print("Accessibility: " + ("granted" if accessibility else
+          "missing or unavailable. Check System Settings > Privacy & Security for this host."))
+    capture_note = "the bundled adapter uses Accessibility only" if bundled else "check whether your runner captures the screen"
+    print(f"Screen Recording (informational): {'granted' if recording else 'unavailable'} ({capture_note}).")
     print("Act consent: " + ("present" if local.consented() else "absent. Run jev-brain consent to enable."))
-    return 0 if runner and backend and accessibility and (bundled or recording) else 1
+    return 0 if runner and backend and accessibility else 1
 
 
 def _install(args: argparse.Namespace) -> int:

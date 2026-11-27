@@ -64,6 +64,34 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(exc.exception.outcome, "wrong window")
         self.mac.ax_press.assert_not_called()
 
+    def test_press_revalidates_focus_ownership_and_hit_after_final_metadata_read(self):
+        read = self.mac.AS.AXUIElementCopyAttributeValue
+        attribute = read.side_effect
+        lookup = self.mac._ax_attr.side_effect
+        for change in ("foreground", "ownership", "obscured"):
+            with self.subTest(change=change):
+                def final_read(ref, key, out):
+                    if ref == self.control and key == "AXPlaceholderValue":
+                        if change == "foreground":
+                            self.observe.return_value = Window("Finder", "Untitled", "", "")
+                        elif change == "ownership":
+                            self.mac._ax_attr.side_effect = lambda ref, k: None if k == "AXWindow" else lookup(ref, k)
+                        else:
+                            self.mac.AS.AXUIElementCopyElementAtPosition.return_value = (0, self.field)
+                    return attribute(ref, key, out)
+
+                self.observe.return_value = self.front
+                self.mac._ax_attr.side_effect = lookup
+                self.mac.AS.AXUIElementCopyElementAtPosition.return_value = (0, self.control)
+                read.side_effect = final_read
+                try:
+                    outcome = self.run_step()
+                except UseRefused as exc:
+                    outcome = exc.outcome
+                self.assertEqual(outcome, "low confidence" if change == "obscured" else "wrong window")
+                self.mac.ax_press.assert_not_called()
+                self.assertEqual(self.result["steps_taken"], 0)
+
     def test_type_only_into_empty_field_and_read_back(self):
         self.args.target, self.args.text = None, "Hello"
         self.mac.ax_value.side_effect = ["already occupied", "", "", "Hello"]

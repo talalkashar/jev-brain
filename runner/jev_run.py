@@ -17,31 +17,21 @@ def _attribute(mac, ref, key):
     return value
 
 
-def _unique_button(mac, window, label):
-    try:
-        match = foreground.unique_target(window, label,
-                                         lambda ref: _attribute(mac, ref, "AXChildren"),
-                                         lambda ref, key: _attribute(mac, ref, key))
-    except foreground.TargetUnavailable as exc:
-        return None, exc.outcome
+def _press_point(mac, match):
     frame = mac._ax_frame(match)
     actions = mac._ax_actions(match)
     if not frame or min(frame[2:]) <= 0 or "AXPress" not in actions:
-        return None, "low confidence"
-    # Hit-test the centre to exclude clipped, covered and off-display controls.
+        return None
     x, y, w, h = frame
-    error, visible = mac.AS.AXUIElementCopyElementAtPosition(
-        mac.AS.AXUIElementCreateSystemWide(), x + w / 2, y + h / 2, None)
-    if error or visible != match:
-        return None, "low confidence"
-    return match, None
+    return x + w / 2, y + h / 2
 
 
 def perform(args, mac, result):
     if args.target and args.text is not None:
         return "refused"
     window = check_window(args.expect)
-    app_ref = mac._ax_attr(mac.AS.AXUIElementCreateSystemWide(), "AXFocusedApplication")
+    system = mac.AS.AXUIElementCreateSystemWide()
+    app_ref = mac._ax_attr(system, "AXFocusedApplication")
     if app_ref is None or mac._ax_attr(app_ref, "AXTitle") != window.app:
         raise UseRefused("The front app changed.", "wrong window")
     error, pid = mac.AS.AXUIElementGetPid(app_ref, None)
@@ -52,21 +42,29 @@ def perform(args, mac, result):
         raise UseRefused("The front window is unavailable.", "wrong window")
 
     def recheck(ref):
-        if (check_window(args.expect) != window or mac._ax_attr(app_ref, "AXFocusedWindow") != window_ref
-                or mac._ax_attr(ref, "AXWindow") != window_ref):
+        if (check_window(args.expect) != window or mac._ax_attr(ref, "AXWindow") != window_ref
+                or mac._ax_attr(app_ref, "AXFocusedWindow") != window_ref
+                or mac._ax_attr(system, "AXFocusedApplication") != app_ref):
             raise UseRefused("The control or window changed.", "wrong window")
 
     if args.target:
-        ref, refusal = _unique_button(mac, window_ref, args.target)
-        if refusal:
-            return refusal
-        recheck(ref)
+        def attribute(ref, key):
+            return _attribute(mac, ref, key)
+
         try:
-            metadata = foreground.control_metadata(ref, args.target, lambda ref, key: _attribute(mac, ref, key))
+            ref = foreground.unique_target(window_ref, args.target, lambda ref: attribute(ref, "AXChildren"), attribute)
+            metadata = foreground.control_metadata(ref, args.target, attribute)
         except foreground.TargetUnavailable as exc:
             return exc.outcome
         if sensitive_control(*metadata):
             return "sensitive"
+        point = _press_point(mac, ref)
+        if point is None:
+            return "low confidence"
+        recheck(ref)
+        error, visible = mac.AS.AXUIElementCopyElementAtPosition(system, *point, None)
+        if error or visible != ref:
+            return "low confidence"
         if args.act:
             result["steps_taken"] = None
             if not mac.ax_press(ref):
