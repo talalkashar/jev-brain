@@ -33,9 +33,10 @@ class ActTests(unittest.TestCase):
         (self.home / "sitecustomize.py").write_text(
             "import os, sys\nfrom types import SimpleNamespace\nfrom jev_brain import foreground, computer_use\n"
             "if os.name == 'posix': computer_use.sys = SimpleNamespace(platform='darwin', executable=sys.executable)\n"
-            # The foreground deadline test controls only AX latency. Slow durable
-            # writes have dedicated tests for the 'audit indeterminate' outcome.
-            "if os.getenv('SLOW_PROBE'): computer_use.local.append_audit = lambda *args: (1, 1)\n"
+            # Isolate short AX and pipe-drain deadlines from filesystem latency.
+            # Dedicated audit tests cover stalled initial and final writes.
+            "if os.getenv('SLOW_PROBE') or os.getenv('HELD_PIPE'):\n"
+            "    computer_use.local.append_audit = lambda *args: (1, 1)\n"
             "def current():\n"
             "    if os.getenv('SLOW_PROBE'):\n"
             "        from pathlib import Path\n"
