@@ -20,7 +20,8 @@ class InstallCommandTests(unittest.TestCase):
 
     def _child_env(self):
         # Path.home() reads USERPROFILE on Windows and HOME elsewhere.
-        return _env(HOME=str(self.home), USERPROFILE=str(self.home))
+        return _env(HOME=str(self.home), USERPROFILE=str(self.home),
+                    PATH=str(self.home) + os.pathsep + os.environ.get("PATH", ""))
 
     def _assert_targeted_temp_home(self, stdout: str):
         home_line = stdout.splitlines()[0]
@@ -155,11 +156,12 @@ class InstallCommandTests(unittest.TestCase):
         self.assertIn('[mcp_servers.jev-brain-extra]\ncommand = "keep"', path.read_text())
 
     def _seed_existing(self):
+        (self.home / ("keep.exe" if os.name == "nt" else "keep")).touch(mode=0o755)
         (self.home / ".claude.json").write_text(
             json.dumps(
                 {
                     "userID": "kept",
-                    "mcpServers": {"other": {"type": "stdio", "command": "keep", "args": ["--a"]}},
+                    "mcpServers": {"other": {"type": "stdio", "command": "keep", "cwd": str(self.home), "args": ["--a"]}},
                 }
             )
             + "\n",

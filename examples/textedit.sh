@@ -1,4 +1,5 @@
 #!/bin/sh
+# Requires a trusted external executor. The bundled adapter refuses live input.
 # Run jev-brain consent yourself first. Prepare a new, empty TextEdit document.
 # The delay gives you time to bring that document forward and focus its text area.
 set -eu

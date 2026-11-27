@@ -11,6 +11,7 @@ import json
 import os
 import re
 import stat
+import sysconfig
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -230,40 +231,84 @@ def _program_name(path):
     return name.removesuffix(".exe")
 
 
-def _entry_point(path, cwd=None):
-    """Classify only the selected program or script, before its own arguments."""
-    if _program_name(path) in _COMMANDS:
-        return True
-    # A client or wrapper can supply its own working directory. Recognize the
-    # package-qualified spelling from any installation, including Windows paths.
-    if "$" in path or "%" in path or path.startswith("~"):
-        return None
+def _declared_server(path):
     entry = PurePosixPath(path.replace("\\", "/"))
-    if cwd:
-        entry = PurePosixPath(cwd.replace("\\", "/")) / entry
-    if entry.name.casefold() == "mcp_server.py" and entry.parent.name.casefold() in {"jev_brain", "systemone"}:
-        return True
-    # A local alias may point straight at a shipped file under a different name.
-    if Path(entry).is_absolute():
-        try:
-            resolved = Path(entry).resolve()
-        except (ValueError, RuntimeError, OSError):
+    return (_program_name(path) in _COMMANDS
+            or entry.name.casefold() == "mcp_server.py" and entry.parent.name.casefold() in {"jev_brain", "systemone"})
+
+
+def _literal(path):
+    return not (path.startswith("~") or any(char in path for char in ("$", "%", "\x00")))
+
+
+def _resolve_program(command, cwd, search, *, script=False):
+    """Return the selected regular file. Never execute or import configuration."""
+    if not _literal(command) or not _literal(str(cwd)):
+        return None
+    path = Path(command)
+    if script or path.is_absolute() or "/" in command or "\\" in command:
+        candidates = [cwd / path]
+    elif search is None or not _literal(search):
+        return None
+    else:
+        dirs = [cwd / item for item in search.split(os.pathsep)]
+        if os.name == "nt":
+            dirs.insert(0, cwd)
+        candidates = [directory / path for directory in dirs]
+    for candidate in candidates:
+        if not candidate.is_absolute():
             return None
-        if resolved.name.casefold() == "mcp_server.py":
-            return True if resolved.parent.name.casefold() in {"jev_brain", "systemone"} else None
-        if _program_name(resolved.name) in _COMMANDS:
+        if os.name == "nt" and not script and not candidate.suffix:
+            # Clients can select different PATHEXT/script or shell handlers.
+            # Only an unambiguous native executable can establish identity.
+            matches = list(candidate.parent.glob(candidate.name + ".*"))
+            if matches:
+                if len(matches) != 1 or matches[0].suffix.lower() != ".exe":
+                    return None
+                candidate = matches[0]
+        if candidate.is_file() and (script or os.access(candidate, os.X_OK)):
+            return candidate.resolve(strict=True)
+    return None
+
+
+def _file_is_server(file, cwd, search):
+    if _declared_server(str(file)):
+        return True
+    if file.name.casefold() == "mcp_server.py":
+        return None
+    identity = file.stat()
+    if identity.st_nlink == 1:
+        return False
+    # A hard link has no preferred spelling. Compare device and inode against
+    # both installed console entries and the two shipped Python files.
+    src = Path(__file__).resolve().parents[1]
+    known = [src / package / "mcp_server.py" for package in ("jev_brain", "systemone")]
+    dirs = {file.parent, Path(sysconfig.get_path("scripts"))}
+    if search is not None and _literal(search):
+        dirs.update(cwd / directory for directory in search.split(os.pathsep))
+    suffix = ".exe" if os.name == "nt" else ""
+    known.extend(directory / (name + suffix) for directory in dirs for name in _COMMANDS)
+    for possible in known:
+        if possible.is_absolute() and possible.is_file() and os.path.samestat(identity, possible.stat()):
             return True
-    return None if entry.name.casefold() == "mcp_server.py" else False
+    return None
 
 
-def _python_server(args, launcher, cwd):
+def _script_identity(script, cwd, search):
+    if _declared_server(str(cwd / script)) or _declared_server(script):
+        return True
+    file = _resolve_program(script, cwd, search, script=True)
+    return _file_is_server(file, cwd, search) if file is not None else None
+
+
+def _python_server(args, launcher, cwd, search, safe_path):
     """True for a server entry point, False for another program, None for an opaque invocation."""
     for arg in args:
         if arg == "--":
             script = next(args, None)
-            return _entry_point(script, cwd) if script else None
+            return _script_identity(script, cwd, search) if script else None
         if not arg.startswith("-"):
-            return _entry_point(arg, cwd)
+            return _script_identity(arg, cwd, search)
         if launcher == "py" and re.fullmatch(r"-(?:[23](?:\.\d+)?(?:-32|-64)?|V:.+)", arg):
             continue
         if arg == "--check-hash-based-pycs":
@@ -273,34 +318,76 @@ def _python_server(args, launcher, cwd):
             return None
         # CPython accepts grouped flags and attached operands, e.g. -Immodule.
         for index, flag in enumerate(arg[1:], start=2):
-            if flag in "bBdEiIOPqRsSuvx":
+            if flag in "IP":
+                safe_path = True
+                continue
+            if flag in "bBdEiOqRsSuvx":
                 continue
             if flag in "WXm":
                 value = arg[index:] or next(args, None)
                 if value is None:
                     return None
                 if flag == "m":
-                    return value in _MODULES
+                    if value in _MODULES:
+                        return True
+                    # Without safe-path mode, -m looks in the launch directory
+                    # first. Only classify a plain, unambiguous source module.
+                    if safe_path or not cwd.is_absolute() or not value.isidentifier():
+                        return None
+                    source = cwd / (value + ".py")
+                    if (cwd / value).exists() or any(item != source for item in cwd.glob(value + ".*")):
+                        return None
+                    return _script_identity(str(source), cwd, search)
                 break
             # Inline code and unknown interpreter/launcher options need review.
             return None
     return None
 
 
-def _server_invocation(command, arguments, cwd):
-    """Follow literal env and uv run commands without executing configuration."""
-    program = _program_name(command)
+def _server_invocation(command, arguments, cwd, env):
+    """Resolve each selected program in its launch context before declaring it unrelated."""
     args = iter(arguments)
-    changes_path = False
-    while program in {"env", "uv"}:
-        changes_path |= program == "uv"
-        if program == "uv" and next(args, None) != "run":
+    cwd = Path(cwd)  # A relative client working directory has no known absolute base.
+    if os.name == "nt":
+        # Windows environment keys are case-insensitive. Conflicting spellings
+        # or a client-specific extension search order have no portable meaning.
+        if len({key.upper() for key in env}) != len(env) or any(key.upper() == "PATHEXT" for key in env):
             return None
+        env = {key.upper(): value for key, value in env.items()}
+    search = env.get("PATH", os.environ.get("PATH", os.defpath))
+    if not isinstance(search, str):
+        return None
+    scoped_search = "PATH" in env
+    safe_path = bool(env.get("PYTHONSAFEPATH", os.environ.get("PYTHONSAFEPATH")))
+    wrappers_resolved = True
+    while True:
+        file = _resolve_program(command, cwd, search)
+        if file is not None:
+            identity = _file_is_server(file, cwd, search)
+            if identity is not False:
+                return identity
+        if _declared_server(command) or _declared_server(str(cwd / command)):
+            if scoped_search and file is None and "/" not in command.replace("\\", "/"):
+                return None
+            return True
+        program = _program_name(str(file) if file else command)
+        if program not in {"env", "uv"}:
+            break
+        wrappers_resolved &= file is not None
+        if program == "uv":
+            if next(args, None) != "run":
+                return None
+            search = None  # uv selects a project environment, potentially including a new PATH.
+            scoped_search = True
         for arg in args:
             if arg == "--":
                 arg = next(args, "")
             elif program == "env" and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", arg):
-                changes_path |= arg.startswith("PATH=")
+                key, _, value = arg.partition("=")
+                if key == "PATH":
+                    search, scoped_search = value, True
+                elif key == "PYTHONSAFEPATH":
+                    safe_path = bool(value)
                 continue
             elif program == "uv":
                 option, equals, value = arg.partition("=")
@@ -310,40 +397,40 @@ def _server_invocation(command, arguments, cwd):
                     if not value:
                         return None
                     if option == "--directory":
-                        cwd = str(PurePosixPath(cwd or ".") / value)
+                        cwd = cwd / value
                     continue
                 if arg in {"--no-sync", "--frozen", "--locked", "--isolated", "--active", "--no-project"}:
                     continue
             if not arg or arg.startswith("-"):
                 return None
-            command, program = arg, _program_name(arg)
+            command = arg
             break
         else:
             return None
-    if program in _COMMANDS:
-        # uv and PATH overrides can select a different environment's console script.
-        return None if changes_path and "/" not in command.replace("\\", "/") else True
-    identity = _entry_point(command, cwd)
-    if identity is not False:
-        return identity
     if re.fullmatch(r"pythonw?(?:\d+(?:\.\d+)*t?)?|py", program):
-        return _python_server(args, program, cwd)
-    if program.endswith((".py", ".pyw", ".pyz")):
-        return False
-    if program in {"uvx", "pipx", "poetry", "conda", "sh", "bash", "zsh", "fish", "cmd", "pwsh", "powershell"}:
+        identity = _python_server(args, program, cwd, search, safe_path)
+    elif program.endswith((".py", ".pyw", ".pyz")):
+        # uv run accepts a relative script as a file operand.
+        identity = _script_identity(command, cwd, search)
+        if search is None and identity is False:
+            return False if wrappers_resolved else None
+    elif program in {"uvx", "pipx", "poetry", "conda", "sh", "dash", "ash", "ksh", "bash", "zsh", "fish", "cmd", "pwsh", "powershell"}:
         return None
-    # An unfamiliar launcher with an explicit server operand may be a wrapper.
-    if any(arg in _MODULES or _entry_point(arg, cwd) is not False for arg in args):
+    else:
+        if any(arg in _MODULES or _declared_server(arg) for arg in args):
+            return None
+        identity = False
+    if identity is False and (file is None or not wrappers_resolved):
         return None
-    return False
+    return identity
 
 
 def _existing_server(servers):
     if not isinstance(servers, dict):
         raise InstallError("Cannot identify the MCP server entries.")
+    if _NAMES.intersection(servers):
+        return True
     for name, entry in servers.items():
-        if name in _NAMES:
-            return True
         command = entry.get("command") if isinstance(entry, dict) else None
         if isinstance(entry, dict) and command is None and isinstance(entry.get("url"), str):
             continue
@@ -352,7 +439,12 @@ def _existing_server(servers):
         cwd = entry.get("cwd", "") if isinstance(entry, dict) else None
         if (isinstance(command, str) and command and isinstance(cwd, str)
                 and isinstance(args, list) and all(isinstance(v, str) for v in args)):
-            identity = _server_invocation(command, args, cwd)
+            env = entry.get("env", {})
+            if isinstance(env, dict) and isinstance(env.get("PATH", ""), str):
+                try:
+                    identity = _server_invocation(command, args, cwd, env)
+                except (OSError, RuntimeError, ValueError):
+                    identity = None
         if identity is None:
             raise InstallError(f"Review MCP entry {ascii(name)} before installing. Its command may be a wrapped MCP server.")
         if identity:

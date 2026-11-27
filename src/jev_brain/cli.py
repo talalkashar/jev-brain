@@ -232,6 +232,7 @@ def _doctor() -> int:
     if bundled:
         backend = importlib.util.find_spec("typesafe_computer_use") is not None
         print("typesafe-computer-use: " + ("installed" if backend else "missing. " + SETUP))
+        print("Bundled adapter: native previews available with Accessibility. Live presses and writes are refused.")
     elif runner:
         print("External jev-run: verify its backend in the runner's environment.")
     if sys.platform != "darwin":

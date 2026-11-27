@@ -17,6 +17,7 @@ sys.path.pop(0)
 class RunnerTests(unittest.TestCase):
     def setUp(self):
         self.mac = Mock()
+        self.mac.input_revision = lambda: 0  # The in-memory desktop is stable by default.
         self.press = self.mac.AS.AXUIElementPerformAction
         self.write = self.mac.AS.AXUIElementSetAttributeValue
         self.press.return_value = self.write.return_value = 0
@@ -41,7 +42,7 @@ class RunnerTests(unittest.TestCase):
         self.mac._ax_frame.return_value = (10, 10, 40, 20)
         self.mac._ax_actions.return_value = ["AXPress"]
         self.mac.AS.AXUIElementCopyElementAtPosition.return_value = (0, self.control)
-        self.mac.focused_field.return_value = SimpleNamespace(is_text=True, label="",
+        self.mac.focused_field.return_value = SimpleNamespace(is_text=True, role="AXTextArea", label="",
                                                                placeholder="", ref=self.field)
         self.front = Window("TextEdit", "Untitled", "", "AXTextArea", "com.apple.TextEdit", 100)
         self.observe = self.enterContext(patch.object(jev_run, "check_window", return_value=self.front))
@@ -51,7 +52,7 @@ class RunnerTests(unittest.TestCase):
     def run_step(self):
         metadata = ("AXButton", "", self.args.target, "", "") if self.args.target else None
         approval = (jev_run.fingerprint(self.front), jev_run.fingerprint(metadata))
-        return jev_run.perform(self.args, self.mac, self.result, approval)
+        return jev_run.perform(self.args, self.mac, self.result, approval, read_revision=self.mac.input_revision)
 
     def test_exact_control_and_ambiguous_target(self):
         self.assertEqual(self.run_step(), "target clicked")
@@ -103,7 +104,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(self.run_step(), "text not typed")
         self.write.assert_not_called()
         self.assertEqual(self.run_step(), "text typed")
-        self.write.assert_called_once_with(self.field, self.mac.AS.kAXValueAttribute, "Hello")
+        self.write.assert_called_once_with(self.field, self.mac.AS.kAXSelectedTextAttribute, "Hello")
         self.assertEqual(self.result["typed"], "Hello")
 
     def test_intervening_edit_or_unreadable_field_stops_setter_after_focus_recheck(self):

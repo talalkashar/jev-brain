@@ -18,18 +18,49 @@ def _attribute(mac, ref, key):
     return value
 
 
-def _press_point(mac, match):
-    frame = mac._ax_frame(match)
-    actions = mac._ax_actions(match)
-    if not frame or min(frame[2:]) <= 0 or "AXPress" not in actions:
-        return None
+def _button(mac, system, window, label, approved_metadata):
+    def attribute(ref, key):
+        return _attribute(mac, ref, key)
+
+    ref = foreground.unique_target(window, label, lambda ref: attribute(ref, "AXChildren"), attribute)
+    metadata = foreground.control_metadata(ref, label, attribute)
+    if sensitive_control(*metadata):
+        raise foreground.TargetUnavailable("sensitive")
+    if fingerprint(metadata) != approved_metadata:
+        raise foreground.TargetUnavailable("wrong window")
+    frame = mac._ax_frame(ref)
+    actions = mac._ax_actions(ref)
+    if not frame or min(frame[2:]) <= 0 or not actions or "AXPress" not in actions:
+        raise foreground.TargetUnavailable()
     x, y, w, h = frame
-    return x + w / 2, y + h / 2
+    error, hit = mac.AS.AXUIElementCopyElementAtPosition(system, x + w / 2, y + h / 2, None)
+    if error or hit != ref:
+        raise foreground.TargetUnavailable()
+    actual_label = metadata[2] or metadata[3]
+    return ref, actual_label, tuple(actions)
 
 
-def perform(args, mac, result, approval):
+def _field(mac, focused, window):
+    field = mac.focused_field()
+    if not field or not field.is_text or field.ref is None:
+        raise foreground.TargetUnavailable("text not typed")
+    if sensitive_surface(field.label, field.placeholder):
+        raise foreground.TargetUnavailable("sensitive")
+    if (field.ref != focused or field.role != window.field_role
+            or field.label != (window.field_label or window.description) or field.placeholder != window.placeholder):
+        raise foreground.TargetUnavailable("wrong window")
+    if mac.ax_value(field.ref) != "":
+        raise foreground.TargetUnavailable("text not typed")
+    return field.ref
+
+
+def perform(args, mac, result, approval, *, read_revision=None):
     if args.target and args.text is not None:
         return "refused"
+    # A revision is evidence only from a source which synchronously invalidates
+    # it for *every* guarded change. Separate native AX reads provide no such
+    # evidence. The installed entry point therefore leaves this unavailable.
+    revision = read_revision() if args.act and read_revision is not None else None
     window = check_window(args.expect)
     if fingerprint(window) != approval[0]:
         raise UseRefused("The supervisor approved a different foreground.", "wrong window")
@@ -49,82 +80,73 @@ def perform(args, mac, result, approval):
         if check_window(args.expect) != window:
             raise UseRefused("The foreground changed.", "wrong window")
 
-    def check_owner(ref, *, focused=False):
+    def check_owner(ref):
         if (mac._ax_attr(ref, "AXWindow") != window_ref
                 or mac._ax_attr(app_ref, "AXFocusedWindow") != window_ref
-                or (focused and focused_ref != ref)
                 or mac._ax_attr(app_ref, "AXFocusedUIElement") != focused_ref
                 or mac._ax_attr(system, "AXFocusedApplication") != app_ref):
             check_front()
             raise UseRefused("The control or window changed.", "wrong window")
 
-    if args.target:
-        def attribute(ref, key):
-            return _attribute(mac, ref, key)
-
-        try:
-            ref = foreground.unique_target(window_ref, args.target, lambda ref: attribute(ref, "AXChildren"), attribute)
-            point = _press_point(mac, ref)
-            if args.act:
-                mac.check_abort()
-            metadata = foreground.control_metadata(ref, args.target, attribute)
-        except foreground.TargetUnavailable as exc:
-            return exc.outcome
-        if sensitive_control(*metadata):
-            return "sensitive"
-        if fingerprint(metadata) != approval[1]:
-            return "wrong window"
-        if point is None:
-            return "low confidence"
-        def visible():
-            error, hit = mac.AS.AXUIElementCopyElementAtPosition(system, *point, None)
-            return not error and hit == ref
-
+    def final_gate():
+        if args.text is not None:
+            _field(mac, focused_ref, window)
+        check_front()
+        if args.target:
+            current = _button(mac, system, window_ref, args.target, approval[1])
+            if current != button:
+                raise foreground.TargetUnavailable("wrong window")
+            actual_label = current[1]
+        else:
+            actual_label = None
         check_owner(ref)
-        check_front()
-        if not visible():
-            return "low confidence"
-        if args.act:
-            check_front()
-            if not visible():
-                return "low confidence"
-            check_owner(ref)
-            result["steps_taken"] = None
-            if mac.AS.AXUIElementPerformAction(ref, mac.AX_PRESS) != 0:
-                return "input unconfirmed"
-            result.update(clicked=args.target, steps_taken=1)
-            return "target clicked"
+        if args.text is not None:
+            if mac.ax_value(ref) != "":
+                raise foreground.TargetUnavailable("text not typed")
+            if mac._ax_attr(system, "AXFocusedApplication") != app_ref:
+                check_front()
+                raise foreground.TargetUnavailable("wrong window")
+        mac.check_abort()
+        latest = read_revision() if read_revision is not None else None
+        if type(revision) is not int or type(latest) is not int or latest != revision:
+            raise foreground.TargetUnavailable("unverifiable input")
+        return actual_label
 
-    if args.text is not None:
-        field = mac.focused_field()
-        if not field or not field.is_text or field.ref is None:
-            return "text not typed"
-        if sensitive_surface(field.label, field.placeholder):
-            return "sensitive"
-        if mac.ax_value(field.ref) != "":
-            return "text not typed"
-        check_owner(field.ref, focused=True)
-        check_front()
+    try:
+        if args.target:
+            button = _button(mac, system, window_ref, args.target, approval[1])
+            ref = button[0]
+            mutate, operands = mac.AS.AXUIElementPerformAction, (ref, mac.AX_PRESS)
+        elif args.text is not None:
+            ref = _field(mac, focused_ref, window)
+            # Insert at the selection in an empty field. Never replace AXValue.
+            mutate = mac.AS.AXUIElementSetAttributeValue
+            operands = (ref, mac.AS.kAXSelectedTextAttribute, args.text)
+        else:
+            return "refused" if args.act else "dry run"
         if args.act:
             mac.check_abort()
-        if mac._ax_attr(app_ref, "AXFocusedUIElement") != field.ref:
-            return "wrong window"
-        if mac.ax_value(field.ref) != "":
-            return "text not typed"
-        if args.act:
-            check_front()
-            if mac.ax_value(field.ref) != "":
+        check_front()
+        check_owner(ref)
+        if not args.act:
+            if args.text is not None and mac.ax_value(ref) != "":
                 return "text not typed"
-            check_owner(field.ref, focused=True)
-            result["steps_taken"] = None
-            if mac.AS.AXUIElementSetAttributeValue(field.ref, mac.AS.kAXValueAttribute, args.text) != 0:
-                return "input unconfirmed"
-            result["steps_taken"] = 1
-            if mac.ax_value(field.ref) != args.text:
-                return "text unconfirmed"
-            result["typed"] = args.text
-            return "text typed"
-    return "refused" if args.act else "dry run"
+            return "dry run"
+        label = final_gate()
+    except foreground.TargetUnavailable as exc:
+        return exc.outcome
+
+    result["steps_taken"] = None
+    if mutate(*operands) != 0:
+        return "input unconfirmed"
+    result["steps_taken"] = 1
+    if args.target:
+        result["clicked"] = label
+        return "target clicked"
+    if mac.ax_value(ref) != args.text:
+        return "text unconfirmed"
+    result["typed"] = args.text
+    return "text typed"
 
 
 def _arguments():

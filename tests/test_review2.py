@@ -233,11 +233,14 @@ class ParentReviewTests(unittest.TestCase):
 
 class ConfigReviewTests(unittest.TestCase):
     def test_unrelated_server_arguments_do_not_suppress_installation(self):
-        docs = {"command": "indexer", "args": ["systemone"], "env": {"TOOL": "jev-brain-mcp"}}
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        (directory / ("indexer.exe" if os.name == "nt" else "indexer")).touch(mode=0o755)
+        self.enterContext(patch.dict(os.environ, {"PATH": str(directory)}))
+        docs = {"cwd": str(directory), "command": "indexer", "args": ["systemone"], "env": {"TOOL": "jev-brain-mcp"}}
         original = {"mcpServers": {"docs": docs}}
         updated = json.loads(install._upsert_json(json.dumps(original)))
         self.assertEqual(updated["mcpServers"], {"docs": docs, "jev-brain": install._SERVER})
-        original = '[mcp_servers.docs]\ncommand="indexer"\nargs=["systemone"]\n'
+        original = f'[mcp_servers.docs]\ncwd={json.dumps(str(directory))}\ncommand="indexer"\nargs=["systemone"]\n'
         self.assertIn("jev-brain", tomllib.loads(install._upsert_toml(original))["mcp_servers"])
 
     def test_standalone_disable_policy_explains_refusal_without_disclosing_values(self):

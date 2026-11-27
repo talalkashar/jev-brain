@@ -132,7 +132,7 @@ MAX_OUTPUT = 65536
 MAX_FIELD = 4096
 OUTCOMES = {"done", "dry run", "target clicked", "text typed", "target not clicked", "text not typed",
             "text unconfirmed", "input unconfirmed", "sensitive", "wrong window", "low confidence", "target not found",
-            "stalled", "refused", "runner error"}
+            "stalled", "refused", "unverifiable input", "runner error"}
 
 
 def _remaining(deadline):
@@ -211,6 +211,10 @@ def _launch(argv, work_deadline, deadline, approval):
             _remaining(work_deadline)
             command = [sys.executable, "-I", "-S", "-c", _LAUNCHER, str(work_deadline), *argv]
             env = os.environ | {"JEV_BRAIN_EXECUTOR_CHILD": "1", "JEV_BRAIN_APPROVAL": approval.stamp()}
+            approval.recheck(work_deadline)
+            _remaining(work_deadline)
+            if release.is_set():
+                raise TimeoutError
             proc = subprocess.Popen(command, env=env,
                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     start_new_session=True)
@@ -318,8 +322,10 @@ def _run(argv, body, deadline, text, approval):
         elif type(steps) is not int or steps != int(act and outcome == "text unconfirmed"):
             raise ValueError
         clicked, typed = data.get("clicked"), data.get("typed")
-        if clicked is not None and (not act or not success or text is not None or clicked != body["target"]):
-            raise ValueError
+        if clicked is not None:
+            labels = (body["target"],) if approval.metadata is None else approval.metadata[2:4]
+            if not act or not success or text is not None or not clicked or clicked not in labels:
+                raise ValueError
         if typed is not None and (not act or not success or text is None or typed != text):
             raise ValueError
         confidence = data.get("confidence")
@@ -328,6 +334,9 @@ def _run(argv, body, deadline, text, approval):
         body.update(outcome=outcome, steps=steps, confidence=confidence, clicked=clicked, typed=typed)
         if outcome == "runner error":
             body["error"] = f"jev-run could not complete the backend call. {SETUP}"
+        if outcome == "unverifiable input":
+            body["error"] = "The backend cannot verify a consistent foreground, control and operator stop before input."
+            return 2
         if success:
             return 0
         return 2 if outcome in ("refused", "sensitive") else 3
@@ -453,8 +462,6 @@ def _execute(body, parts, *, act, armed, text, deadline, record, bundled, limits
     if act:
         argv.append("--act")
     code = _run(argv, body, deadline, text, approval)
-    if code == 0 and body["outcome"] == "target clicked":
-        body["clicked"] = target
     if code == 0 and body["outcome"] == "text typed":
         body["typed"] = text
     return code

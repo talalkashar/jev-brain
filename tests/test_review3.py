@@ -19,11 +19,11 @@ from jev_brain import cli, computer_use as gate, foreground, install, local
 
 
 class InstallerTests(unittest.TestCase):
-    def plans(self, command, args):
-        entry = {"command": command, "args": args, "allowedTools": ["health"]}
+    def plans(self, command, args, cwd=""):
+        entry = {"cwd": cwd, "command": command, "args": args, "allowedTools": ["health"]}
         original = json.dumps({"mcpServers": {"library": entry}})
         yield original, install._upsert_json, lambda value: json.loads(value)["mcpServers"]
-        original = (f'[mcp_servers.library]\ncommand={json.dumps(command)}\n'
+        original = (f'[mcp_servers.library]\ncwd={json.dumps(cwd)}\ncommand={json.dumps(command)}\n'
                     f'args={json.dumps(args)}\ndisabled_tools=["use"]\n')
         yield original, install._upsert_toml, lambda value: tomllib.loads(value)["mcp_servers"]
 
@@ -47,10 +47,15 @@ class InstallerTests(unittest.TestCase):
                 self.assertNotIn("private-value", str(raised.exception))
 
     def test_python_application_arguments_do_not_suppress_installation(self):
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        for name in ("indexer.py", "-indexer.py", "python3", "uv"):
+            suffix = ".exe" if os.name == "nt" and not name.endswith(".py") else ""
+            (directory / (name + suffix)).touch(mode=0o755)
+        self.enterContext(patch.dict(os.environ, {"PATH": str(directory)}))
         for command, invocation in (("python3", ["indexer.py"]), ("python3", ["--", "-indexer.py"]),
                                     ("python3", ["-X", "dev", "-m", "indexer"]), ("uv", ["run", "indexer.py"])):
             args = [*invocation, "-m", "jev_brain.mcp_server"]
-            for original, plan, servers in self.plans(command, args):
+            for original, plan, servers in self.plans(command, args, str(directory)):
                 with self.subTest(invocation=invocation, format=plan.__name__):
                     updated = servers(plan(original))
                     self.assertEqual(set(updated), {"library", "jev-brain"})
@@ -81,7 +86,10 @@ class DoctorTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "posix", "POSIX startup supervision")
 class StartupTests(unittest.TestCase):
-    approval = gate._Approval("Notes", None, foreground.Window("Notes", "Note", "", "AXTextArea"), None)
+    def setUp(self):
+        front = foreground.Window("Notes", "Note", "", "AXTextArea", "com.apple.Notes", 12)
+        self.approval = gate._Approval("Notes", None, front, None)
+        self.enterContext(patch.object(foreground, "current", return_value=front))
 
     def test_blocked_process_constructor_obeys_deadline(self):
         release = threading.Event()
