@@ -1,0 +1,42 @@
+# Invoked only from an isolated test PATH with an absolute Python shebang.
+import hashlib
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+parser = argparse.ArgumentParser(allow_abbrev=False)
+parser.add_argument("goal")
+parser.add_argument("--act", action="store_true")
+parser.add_argument("--steps", choices=["1"], required=True)
+parser.add_argument("--handoffs", choices=["0"], required=True)
+parser.add_argument("--expect", required=True)
+parser.add_argument("--target")
+parser.add_argument("--text")
+args = parser.parse_args()
+root = Path(os.environ["HOME"])
+with (root / "calls").open("a") as log:
+    print(json.dumps(hashlib.sha256(json.dumps(vars(args), sort_keys=True).encode()).hexdigest()), file=log)
+
+if os.environ.get("SLEEP"):
+    # Inherit the parent's stdout pipe. communicate() only completes when both stop.
+    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    (root / "ready").touch()
+    time.sleep(30)
+if os.environ.get("HUGE"):
+    sys.stdout.write("x" * 80000)
+    sys.exit(0)
+if os.environ.get("HELD_PIPE"):
+    # Simulate a detached pipe holder; it self-exits without reading any data.
+    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(3)"], start_new_session=True)
+    sys.exit(0)
+if os.environ.get("BROKEN"):
+    print("no result")
+    sys.exit(0)
+outcome = os.environ.get("OUTCOME", "text typed" if args.text else "target clicked")
+print(json.dumps(dict(outcome=outcome, steps_taken=int(os.getenv("STEPS", "1" if outcome in ("target clicked", "text typed") else "0")), confidence=0.92,
+                      typed=args.text if outcome == "text typed" else None,
+                      clicked=args.target if outcome == "target clicked" else None)))

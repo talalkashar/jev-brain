@@ -10,8 +10,8 @@ from pathlib import Path
 from unittest import mock
 
 import srcpath  # side effect: put src/ on sys.path
-from systemone.engine import MockEngine
-from systemone.server import DecisionServer, ensure_local_bind
+from jev_brain.engine import MockEngine
+from jev_brain.server import DecisionServer, ensure_local_bind
 
 
 def _request(method, url, payload=None):

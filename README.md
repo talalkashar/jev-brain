@@ -1,195 +1,96 @@
-# SystemOne
+# jev-brain
 
-Your agent decides. SystemOne checks that decision before a computer-use program can run.
-
-License: MIT. Python 3.11 or newer. Copyright (c) 2026 Talal Kashar. See [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md), and [LICENSE](LICENSE).
-
-Any agent can be the brain. Claude, Grok, ChatGPT, Gemini, DeepSeek, Qwen, GLM, Kimi, Llama, Mistral, a model you run yourself, or any other program that can run a command. There is no model SDK in this package and no OpenAI requirement. The agent picks the window and the action. SystemOne checks that choice, refuses sensitive surfaces, and can hand the already chosen target and request to an installed `jev-run`. jev does not choose the action. This release never passes `--act`, so it does not click, type, or move the pointer.
-
-Mock answers from `systemone serve --mock` are fixed wiring. They are not a model and not a judgment. This package does not download weights and it does not call TypeSafe.
-
-## What jev is
-
-People use the name for two different things.
-
-Jev, the model, is [TypeSafe](https://docs.typesafe.ai/models)'s System One model (`jev-1.14.0` and `jev-1.13.0` on their models page). It is not a chatbot. You send a state and closed questions. It returns a typed answer and probabilities for each question. It does not write a plan, an email, or code. The question types on that page are Choice, Score, and Noul. Jev 1.14 adds Box.
-
-jev, the program, is Aaron Levin's [typesafe-computer-use](https://github.com/awlevin/typesafe-computer-use). It reads a Mac screen, asks that model which action, item, and site come next, and can click. The classifier is the decision maker there. The writing model only supplies free text.
-
-SystemOne is neither of those. It does not include Aaron Levin's source, and it does not sell access to the Jev model.
-
-## What it costs
-
-This package is MIT and has no runtime dependencies. Installing it creates no TypeSafe bill.
-
-TypeSafe's [models page](https://docs.typesafe.ai/models) lists Jev 1.14 and Jev 1.13 at **$0.042 per million input tokens**. Output tokens are free. That is their list price. A gateway or a prepaid pack can differ. Check the page for the current number.
-
-Aaron Levin's README publishes the computer-use figure: about **$0.0002 a step**. On one screenshot he measured, a jev decision was $0.0002 and 0.13 to 0.38 seconds, against $0.032 and 5.2 seconds for the frontier model on that same screenshot. A 12-step task in that table is about $0.003 on the jev side. Those are his measurements, from [awlevin/typesafe-computer-use](https://github.com/awlevin/typesafe-computer-use). This repository does not re-run them.
-
-## Why that is effective
-
-A step on a screen is usually one choice from a short list of controls. Jev answers that kind of question in one pass and returns probabilities your code can gate on. It does not spend an output-token budget writing a paragraph about the click.
-
-That is the wrong place to decide the goal. Aaron's own write-up says the frontier model read event dates off the pixels, and the classifier needed those facts computed and handed over as state. The large model is the right tool for the goal, the permission, and anything that has to be read and reasoned about. Jev is the right tool for the next control after that decision already exists.
-
-## Why this instead of jev alone
-
-jev alone lets the classifier pick the next action and, when you pass its own `--act`, drive the mouse. Use that when you want the small model to run the desktop.
-
-Use SystemOne when the agent you already trust should keep the decision:
-
-- The caller can be any agent. If it can run `systemone use --target WINDOW --request ACTION`, it can use this. DeepSeek, Qwen, GLM, Kimi, and a model on your own machine are the same shape of caller as Claude or ChatGPT.
-- The check is in code. Banking, mail, messages, password managers, Mason or student records, admin consoles, and login or MFA are refused before a process starts.
-- `--arm` starts `jev-run` with the target and request the agent already chose. The argument list never includes `--act`. The classifier does not get to swap in a different action.
-- MCP is stdio JSON-RPC. Any MCP client can run `systemone-mcp`. The installer prints Claude Code, Cursor, and Codex config because those are the three files it knows. Every other agent adds that same command itself.
-
-This release checks and records the handoff. jev alone is the program that clicks. SystemOne does not click.
-
-## This release
-
-| Piece | What is true |
-| --- | --- |
-| Source | Public and MIT at [github.com/talalkashar/systemone](https://github.com/talalkashar/systemone) |
-| Install | Clone the repo. `pip install systemone` is not a working install yet. |
-| Computer use | Dry run unless you pass `--arm`. `--arm` starts `jev-run` and still omits `--act`. |
-| Closed questions | `systemone serve --mock` returns fixed answers for questions you already shaped. |
-| Writes | `systemone install` prints Claude Code, Cursor, and Codex config and writes nothing unless `--yes`. |
-
-## Install
-
-```bash
-git clone https://github.com/talalkashar/systemone.git
-cd systemone
-python3 -m venv .venv
-.venv/bin/pip install -e .
-.venv/bin/systemone use --target Notes --request "count the windows"
-```
-
-On Windows the command is `.venv\Scripts\systemone`. From a checkout you already have, the venv commands are enough.
-
-| Method | Command | Status |
-| --- | --- | --- |
-| GitHub | `git clone https://github.com/talalkashar/systemone.git` | use this |
-| Editable install | `python3 -m venv .venv && .venv/bin/pip install -e .` | use this |
-| PyPI | no | not published yet |
-
-## Computer use
-
-`systemone use` prints the handoff and starts no process. `--arm` is the explicit arm. It looks up `jev-run` on `PATH` and starts it as:
+Give your agent one way to operate a Mac. Claude, Codex, Grok, or another caller decides the goal and names one step. jev-brain checks the request. With your consent, a trusted external `jev-run` can carry out the step. The bundled macOS adapter supports preview and currently refuses live presses and writes. The agent reads the result and decides what comes next.
 
 ```text
-jev-run --expect TARGET --target TARGET --text REQUEST
+Your agent ── one step ──► jev-brain ── guarded request ──► jev-run ──► Mac
+    ▲                                                          │
+    └────────────── outcome, action, confidence, steps ─────────┘
 ```
 
-That argument list never includes `--act`. Starting `jev-run` this way does not click, type, or move the pointer. A named target and a request are required. The command refuses the handoff before any process starts when the target or the request names any of these surfaces: banking, mail, messages, password managers, Mason or student records, admin consoles, or login or MFA. Each name covers the common apps and sites for it, for example PayPal, Venmo and Coinbase, Signal and WhatsApp, the macOS Passwords app, GMU's student systems, Google and cloud admin consoles, and verification or Duo codes.
+## 60-second quick start
 
-```bash
-systemone use --target Notes --request "count the windows"
+Preview a step from a clone. You need Python 3.11+ for the CLI. Use Python 3.12+ if you also want the optional Mac runner.
+
+```sh
+git clone https://github.com/talalkashar/jev-brain.git
+cd jev-brain
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
+jev-brain use --target Notes --request "Count the open Notes windows"
 ```
+
+Look for `"mode": "dry-run"` and `"started": false`. The preview checks the handoff locally. It leaves Notes alone and returns no window count. It needs no account, desktop permissions, or model access.
+
+## Install the macOS runner
+
+The bundled accessibility preview requires macOS 14+ and a Python 3.12+ virtual environment. From the same clone and activated environment, install the optional adapter. This command installs Aaron Levin’s **typesafe-computer-use** from the revision used by the adapter, its Mac dependencies, and the `jev-run` executable.
+
+```sh
+python -m pip install -e ./runner
+jev-brain doctor
+```
+
+In **System Settings → Privacy & Security → Accessibility**, allow the app that hosts the CLI or agent. Run `doctor` from that host. It checks Python, the runner on `PATH`, and the current process’s permission status. The included adapter needs Accessibility alone. Doctor reports **Screen Recording** for information because it cannot tell whether an external runner captures the screen. A runner that captures the screen needs that permission. [Upstream installation and permissions](https://github.com/awlevin/typesafe-computer-use/tree/44ca11f0935b021b73020825da054b5c92cc1288#install)
+
+If you already use a guarded `jev-run`, put its directory first on `PATH`. It must accept a positional goal, `--expect`, `--target`, `--text`, `--steps 1`, `--handoffs 0`, and `--act`. It must enforce one mutation, recheck focus at input time, and return a recognized JSON outcome with a truthful `steps_taken` count (zero on preview, one on confirmed input). A replacement executable controls its own files. Install both bundled packages in one environment. Upstream’s standalone command is `clicker` and has a different interface. [Upstream command definition](https://github.com/awlevin/typesafe-computer-use/blob/44ca11f0935b021b73020825da054b5c92cc1288/typesafe_computer_use/cli.py)
+
+To install Aaron’s standalone classifier CLI separately, clone `https://github.com/awlevin/typesafe-computer-use`, change into that checkout, and run `uv sync`. Copy its `.env.example` to `.env` there and configure `TYPESAFE_API_KEY` yourself. The upstream executable is `.venv/bin/clicker`. [Upstream setup](https://github.com/awlevin/typesafe-computer-use/tree/44ca11f0935b021b73020825da054b5c92cc1288#install)
+
+## Try one real step with an external runner
+
+This example requires a trusted external executor that supports guarded text insertion. With the bundled adapter, a valid input request returns `unverifiable input` and zero steps. Its pinned backend reads the foreground, control and pointer separately and cannot establish that they stayed consistent.
+
+1. Run `jev-brain consent` **yourself in a terminal** and enter `ALLOW`. This enables future explicit act requests for your local account.
+2. Open a **new, empty TextEdit document**. Return to the terminal and run `sh examples/textedit.sh`.
+3. During the five-second delay, bring the empty document to the front and place the insertion point in it. The demo asks jev to enter `Hello from jev-brain.` and reads the field back.
+
+The demo runs this command after the delay. An MCP caller can send the same step while the document is already in front.
+
+```sh
+jev-brain use --act --expect TextEdit --target 'focused field' \
+  --request 'Write a greeting in the empty document' --text 'Hello from jev-brain.'
+```
+
+For a button, pass its exact accessibility title or description as `--target` and omit `--text`. The adapter checks the whole exposed window tree, including offscreen elements, up to 512 elements. It requires one match that supports a press and is visible at its centre. For text, use `--target 'focused field'` on an empty editable field. Request a press and a write in separate calls. [Notes preview](examples/notes-preview.sh) · [TextEdit demo](examples/textedit.sh)
+
+| Result field | How to read it |
+| --- | --- |
+| `outcome` | For example, `target clicked`, `text typed`, `wrong window`, `sensitive`, or `timeout`. |
+| `clicked`, `typed` | Confirmed control label and literal text, when available. Each call can confirm one mutation. |
+| `confidence` | Runner-supplied confidence, or `null`. The exact-control adapter uses no classifier. |
+| `started` | `false` while execution is withheld or when the OS rejects the executable, `true` after startup, or `null` if startup could not be confirmed. |
+| `steps` | Runner-reported count, zero before launch, or `null` when the runner cannot report it. |
+
+Check the outcome before issuing another step. If a run times out, is interrupted, or reports unconfirmed input, the screen may already have changed.
+
+## Safety and local data
+
+- A normal `use` call checks the handoff locally on any supported OS. On macOS, `--arm` and `--act` both require a verified foreground before starting an executor. Input also requires local consent. The installed `jev-run` entry point uses the same supervisor.
+- Executor-backed calls support TextEdit, Notes, Finder and Calendar by bundle identity. Browser input and armed browser previews are disabled. Even an exact URL gives no independent approval for its origin. This covers regional cloud portals, custom management domains and ordinary sites alike.
+- The parent first reads the foreground, focused control and any named target. After runner lookup and launch preparation, the worker repeats that observation immediately before requesting the helper. The parent repeats it at the helper grant and at executor dispatch. The OS can change focus between an observation and process creation or dispatch. It examines role, subrole, title, description and placeholder and refuses recognized banking, mail, messaging, password managers, student records, admin consoles and login or MFA. An unknown app or failed required read stops the call. Unicode normalization followed by conservative checks can also refuse ordinary localized labels. Accessibility metadata can omit private content.
+- The bundled backend compares its observation with the parent’s approval in an isolated Python interpreter. Its final input gate checks the foreground, focused window and control, exact button metadata and centre hit or editable field and empty value, and the pointer abort corner. The gate needs evidence that those separate reads describe one consistent state. The pinned AX backend supplies no such evidence, so the adapter refuses both mutations. Even with a consistent observation, the interval between the final gate and the OS delivering the input remains. Focus, a button, a selection or the pointer can change in that interval.
+- One 30-second deadline bounds the caller’s wait for the audit, foreground observation, process startup, execution and pipe cleanup. The helper needs both the initial grant and a separate dispatch authorization within that deadline. If the OS cannot start the executor or its interpreter, the result reports zero steps and includes an installation diagnostic. A stalled process constructor can finish later. Its helper receives no grant and is reaped when the OS returns. A slow initial audit prevents input. If the final record cannot be confirmed, the result says `audit indeterminate` and includes the prior `step_outcome` and step count. Check the app before retrying. Ctrl-C stops the supervised process group.
+- Act attempts append a timestamp, random call ID, combined argument length, verified app bundle when available, and a fixed outcome code to `~/.config/jev-brain/audit.jsonl`. Request text, typed text, control labels, window titles, URLs and arbitrary executor output stay out of this file. The bundled runner stores no screenshots.
+- To revoke consent, remove `~/.config/jev-brain/consent.json`. Programs with shell or file access under your user account share your permissions. Only connect agents and executors you trust. [Security details](SECURITY.md)
+
+## MCP and older commands
+
+Run `jev-brain-mcp` as a stdio MCP server. Its `use` tool runs locally without an HTTP service. For example, the TextEdit call’s arguments are:
 
 ```json
-{
-  "mode": "dry-run",
-  "decision_maker": "caller",
-  "hands": "jev",
-  "target": "Notes",
-  "request": "count the windows",
-  "started": false
-}
+{"target":"focused field","request":"Write a greeting in the empty document","expect":"TextEdit","text":"Hello from jev-brain.","act":true}
 ```
 
-`decision_maker` is `caller`. This command does not call the mock engine, and it does not ask jev what to do. If `jev-run` is missing, `--arm` exits 2 and starts nothing.
+Omit `act` for a preview. Both MCP names return matching JSON in the text content and in `structuredContent` for a completed `use` call, including refusals. For example, an empty target sets `isError` to true and returns `outcome: "refused"`, `started: false`, zero steps and an explanation. Malformed tool arguments produce a JSON-RPC invalid-params error.
 
-## How this differs from other Jev projects
+Run `jev-brain install` for a summary of proposed changes to Claude Code, Cursor and Codex. Add `--yes` to apply them. Existing jev-brain and legacy systemone entries keep their name and settings, including disabled states. The installer checks the selected console command, Python module or package-qualified `mcp_server.py` script, including current and legacy absolute and relative paths under literal `env` and `uv run` wrappers. Arguments after a selected Python script or module belong to that application. The installer follows symlinks and compares hard-link identities using the entry’s working directory and PATH override, or the inherited search path. An unresolved executable, unknown relative base, wrapper-selected environment or opaque command can require manual review. The diagnostic names the entry. A conflicting MCP policy also produces a diagnostic. The installer also declines TOML layouts that cannot accept a verified new table. Ensure the agent’s `PATH` includes the virtual environment’s `bin` directory so it can find both commands.
 
-These public projects use Jev as the decision maker:
+The old `systemone` and `systemone-mcp` commands forward to the new commands and print a deprecation line on stderr. Python code can import `jev_brain`. Existing `health` and `decide` clients can still use the local closed-question mock, started with `jev-brain serve --mock`. It returns fixed answers. Set `JEV_BRAIN_URL` to change its default loopback URL. `SYSTEMONE_URL` is the fallback.
 
-| Repository | What their own docs say |
-| --- | --- |
-| [awlevin/typesafe-computer-use](https://github.com/awlevin/typesafe-computer-use) | The TypeSafe classifier picks the next action, item, and site. The writer only supplies free text. |
-| [jkudish/jev-mcp](https://github.com/jkudish/jev-mcp) | MCP tools return typed judgments from TypeSafe's Jev model. |
-| [kofanlabs/typesafe-computer-use-windows](https://github.com/kofanlabs/typesafe-computer-use-windows) | Jev chooses the next operation and target on Windows. |
-| [paulsmith/computer-use-jev](https://github.com/paulsmith/computer-use-jev) | Jev is the decision maker for each next macOS action. |
+## Credits and cost
 
-SystemOne does not. Your agent makes the decision. This package checks it and can hand the already chosen target and request to an installed `jev-run`. It does not vendor Aaron Levin's typesafe-computer-use source.
+Aaron Levin wrote **typesafe-computer-use**, the program whose macOS accessibility functions power the optional adapter. TypeSafe makes **Jev**, the classifier used by Aaron’s full computer-use loop. The core package is MIT-licensed and has no runtime dependencies. Both the local handoff preview and the included exact-control adapter work without model credentials. [Aaron Levin’s project](https://github.com/awlevin/typesafe-computer-use) · [MIT license](LICENSE)
 
-## Tools
-
-| Tool | What it is |
-| --- | --- |
-| `systemone` | CLI. `use`, `serve`, `decide`, `health`, `install`. |
-| `systemone-mcp` | stdio MCP server (newline-delimited JSON-RPC 2.0) for `health` and `decide`. It calls a SystemOne HTTP server. It does not choose a computer-use action. |
-| `src/systemone/skill/SKILL.md` | Agent skill. The agent decides. `systemone use` is the handoff. |
-
-`systemone-mcp` reads `SYSTEMONE_URL` (default `http://127.0.0.1:18100`).
-
-### Agent config
-
-`systemone install` prints the Claude Code, Cursor, and Codex config and writes nothing. `systemone install --yes` writes those files under the current home.
-
-```bash
-systemone install
-systemone install --yes
-systemone install --agent cursor --yes
-```
-
-It sets `mcpServers.systemone` to a stdio server (`command`: `systemone-mcp`) in `~/.claude.json` and `~/.cursor/mcp.json`, and writes `[mcp_servers.systemone]` in `~/.codex/config.toml`. Other servers in those files stay. It refuses a symlink, including a pre-existing `*.systemone-tmp` symlink, and any path outside the home. Read the printout before you pass `--yes`. An agent this installer does not know about uses the same `systemone-mcp` command. The protocol is not tied to one vendor.
-
-## Closed questions
-
-`POST /decide` takes `{"state": string or null, "questions": {name: question}}`. Up to 32 questions. Each instruction is at most 2000 characters. `state` is at most 100000 characters. The running server in this release is the mock.
-
-| type | criteria | answer |
-| --- | --- | --- |
-| `noul` | `null` | `{"p": number}` from 0 to 1 |
-| `choice` | object of label to description, at most 64 labels | `{"label": string}`, one of the keys you sent |
-| `score` | list of labels from low to high, at most 16 | `{"value": index, "label": string}` |
-
-`GET /health` returns `{"status": "ok", "model": string, "mock": bool}`.
-
-```bash
-systemone serve --mock
-```
-
-```bash
-systemone decide --state "the build failed on main" \
-  --question rerun:noul:Should this build be rerun? \
-  --question route:choice:Which queue should take this? \
-  --criteria ci="Build, test, and deploy failures" \
-  --criteria product="User-facing defects" \
-  --question urgency:score:How urgent is this failure? \
-  --score-label low \
-  --score-label normal \
-  --score-label high
-```
-
-Mock mode returns fixed answers: noul `p` is `0.5`, choice is the first label in insertion order, and score is the middle rung (the lower middle when the ladder length is even). `model` is `"mock"`. `latency_s` is the local function duration. Those values are wiring, not a judgment about the text you sent.
-
-```json
-{
-  "answers": {
-    "rerun": {"p": 0.5},
-    "route": {"label": "ci"},
-    "urgency": {"value": 1, "label": "normal"}
-  },
-  "latency_s": 0.0,
-  "model": "mock"
-}
-```
-
-`systemone decide` flags:
-
-- `--question NAME:TYPE:INSTRUCTIONS` is repeatable. Split on the first two colons, so the instruction may contain colons.
-- `--criteria LABEL=TEXT` is repeatable and applies to the most recent choice question.
-- `--score-label TEXT` is repeatable and applies, low to high, to the most recent score question.
-- `--url` overrides `SYSTEMONE_URL`.
-
-## Weights and license
-
-This package's code is MIT. Decision-model weights are not in it. `systemone serve` without `--mock` prints a message to stderr and exits 2. It does not download a model, including when `SYSTEMONE_MODEL=1` is set. Liquid AI d1-omni stays under Liquid's license. Nothing here redistributes that model.
-
-## Privacy
-
-The server binds to `127.0.0.1` and port `18100` unless you change the port. It will not bind `0.0.0.0` unless you pass `--allow-remote`. Leave that flag off.
-
-Do not put secrets in `state`. Do not send banking data, mail, messages, passwords, or student records to `/decide` or to `systemone use`. See `SECURITY.md`.
+For a model-backed executor, TypeSafe lists Jev 1.14 and 1.13 at **$0.042 per million input tokens**, with free output tokens. Aaron reports **about $0.0002 per step** and **about $0.003 for 12 steps**. His one-screenshot comparison measured 0.13–0.38 seconds and $0.0002 for the classifier, and 5.2 seconds and $0.032 for the frontier model. These are his measurements. [TypeSafe pricing](https://docs.typesafe.ai/models) · [Upstream benchmark](https://github.com/awlevin/typesafe-computer-use/blob/44ca11f0935b021b73020825da054b5c92cc1288/README.md#why-a-classifier)

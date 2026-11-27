@@ -10,8 +10,8 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from systemone.engine import Engine, MockEngine
-from systemone.questions import validate_questions, validate_state
+from jev_brain.engine import Engine, MockEngine
+from jev_brain.questions import validate_questions, validate_state
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 18100
@@ -82,7 +82,7 @@ def build_handler(engine: Engine) -> type[BaseHTTPRequestHandler]:
             except ValueError as exc:
                 status, payload = 400, {"error": str(exc)}
             except Exception:
-                print("systemone: internal error", file=sys.stderr, flush=True)
+                print("jev-brain: internal error", file=sys.stderr, flush=True)
                 status, payload = 500, {"error": "internal error"}
             self._send(status, payload)
 
@@ -166,7 +166,7 @@ class DecisionServer:
             return
         self._thread = threading.Thread(
             target=self.serve_forever,
-            name="systemone-http",
+            name="jev-brain-http",
             daemon=True,
         )
         self._thread.start()

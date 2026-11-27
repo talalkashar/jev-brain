@@ -46,5 +46,33 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install editable package and check console names
+        run: |
+          python -m pip install -e .
+          jev-brain --version
+          systemone --version
+          jev-brain use --target Notes --request "Count the windows"
+      - name: Compile package and optional runner
+        run: python -m compileall -q src runner tests
       - name: test
-        run: python -m unittest discover -s tests
+        run: python tests/run_ci.py
+
+  adapter:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install core and pinned macOS backend
+        run: |
+          python -m pip install -e . -e ./runner ruff build
+          python -m pip check
+          python -c "from typesafe_computer_use import macos"
+          jev-run --help
+          python -m build --outdir "$RUNNER_TEMP/runner-dist" ./runner
+      - name: Lint and exercise the adapter with synthetic inputs
+        run: |
+          ruff check src runner tests
+          JEV_TEST_RUNNER_DIST="$RUNNER_TEMP/runner-dist" python tests/run_ci.py

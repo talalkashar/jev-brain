@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jev-brain-macos-runner"
+version = "0.1.0"
+license = "MIT"
+license-files = ["LICENSE", "NOTICE"]
+description = "Optional exact-control jev-run adapter for macOS"
+requires-python = ">=3.12"
+dependencies = [
+    "jev-brain",
+    "typesafe-computer-use @ git+https://github.com/awlevin/typesafe-computer-use.git@44ca11f0935b021b73020825da054b5c92cc1288",
+]
+
+[project.scripts]
+jev-run = "jev_run:main"
+
+[tool.setuptools]
+py-modules = ["jev_run"]

@@ -1,4 +1,4 @@
-"""CLI via `python -m systemone.cli`. The mock server uses a free local port."""
+"""CLI via `python -m jev_brain.cli`. The mock server uses a free local port."""
 
 import json
 import os
@@ -19,6 +19,7 @@ SRC = ROOT / "src"
 def _env(**extra):
     env = os.environ.copy()
     env.pop("SYSTEMONE_URL", None)
+    env.pop("JEV_BRAIN_URL", None)
     previous = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = str(SRC) if not previous else str(SRC) + os.pathsep + previous
     env.update(extra)
@@ -27,7 +28,7 @@ def _env(**extra):
 
 def _run(args, env=None, timeout=10):
     return subprocess.run(
-        [sys.executable, "-m", "systemone.cli", *args],
+        [sys.executable, "-m", "jev_brain.cli", *args],
         cwd=ROOT,
         env=env or _env(),
         capture_output=True,
@@ -47,11 +48,11 @@ def _free_port():
 
 class VersionTests(unittest.TestCase):
     def test_version_matches_the_package(self):
-        from systemone import __version__
+        from jev_brain import __version__
 
         result = _run(["--version"])
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), f"systemone {__version__}")
+        self.assertEqual(result.stdout.strip(), f"jev-brain {__version__}")
 
 
 class ServeTests(unittest.TestCase):
@@ -76,7 +77,7 @@ class ServeTests(unittest.TestCase):
     def test_mock_serves_health_and_decide(self):
         port = _free_port()
         server = subprocess.Popen(
-            [sys.executable, "-m", "systemone.cli", "serve", "--mock", "--port", str(port)],
+            [sys.executable, "-m", "jev_brain.cli", "serve", "--mock", "--port", str(port)],
             cwd=ROOT,
             env=_env(),
             stdout=subprocess.DEVNULL,

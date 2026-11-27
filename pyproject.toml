@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "systemone"
+name = "jev-brain"
 version = "0.1.0"
 description = "Guarded computer-use handoff and closed-question wiring. The caller decides."
 readme = "README.md"
@@ -22,16 +22,25 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/talalkashar/systemone"
-Repository = "https://github.com/talalkashar/systemone"
-Issues = "https://github.com/talalkashar/systemone/issues"
+Homepage = "https://github.com/talalkashar/jev-brain"
+Repository = "https://github.com/talalkashar/jev-brain"
+Issues = "https://github.com/talalkashar/jev-brain/issues"
 
 [project.scripts]
-systemone = "systemone.cli:main"
-systemone-mcp = "systemone.mcp_server:main"
+jev-brain = "jev_brain.cli:main"
+jev-brain-mcp = "jev_brain.mcp_server:main"
+
+systemone = "jev_brain.legacy:cli"
+systemone-mcp = "jev_brain.legacy:mcp"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-systemone = ["skill/SKILL.md"]
+jev_brain = ["skill/SKILL.md"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.pyflakes]
+allowed-unused-imports = ["srcpath"]

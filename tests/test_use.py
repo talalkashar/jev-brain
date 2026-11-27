@@ -1,6 +1,8 @@
-"""Drive the shipped `systemone use` command. The stand-in jev-run only records argv."""
+"""Drive the shipped CLI with an isolated executor that records an argument digest."""
 
+import hashlib
 import json
+import os
 import stat
 import sys
 import tempfile
@@ -35,24 +37,30 @@ class UseCommandTests(unittest.TestCase):
         root = Path(self._temp.name)
         self.bin_dir = root / "bin"
         self.bin_dir.mkdir()
+        (root / "sitecustomize.py").write_text(
+            "import os, sys\nfrom types import SimpleNamespace\nfrom jev_brain import foreground, computer_use\n"
+            "if os.name == 'posix': computer_use.sys = SimpleNamespace(platform='darwin', executable=sys.executable)\n"
+            "foreground.current = lambda: foreground.Window('Notes', 'Note', '', 'AXTextArea', 'com.apple.Notes', 12)\n")
         self.log = root / "argv.log"
         script = self.bin_dir / "jev-run"
         script.write_text(
             f"#!{sys.executable}\n"
+            "import hashlib\n"
             "import os\n"
+            "import json\n"
             "import sys\n"
             "from pathlib import Path\n"
-            "Path(os.environ['SYSTEMONE_USE_ARGV']).write_text(\n"
-            "    '\\n'.join(sys.argv) + '\\n', encoding='utf-8'\n"
-            ")\n",
+            "digest = hashlib.sha256(json.dumps(sys.argv[1:]).encode()).hexdigest()\n"
+            "Path(os.environ['JEV_BRAIN_USE_ARGV']).write_text(digest, encoding='ascii')\n"
+            "print(os.environ.get('STUB_REPLY', json.dumps({'outcome': 'dry run', 'steps_taken': 0})))\n",
             encoding="utf-8",
         )
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
-        if sys.platform == "win32":  # Windows runs no #! script: which() finds jev-run.cmd through PATHEXT
-            (self.bin_dir / "jev-run.cmd").write_text(f'@"{sys.executable}" "%~dp0jev-run" %*\n', encoding="utf-8")
 
     def _child_env(self, path: Path | None = None):
-        return _env(PATH=str(path or self.bin_dir), SYSTEMONE_USE_ARGV=str(self.log))
+        return _env(PATH=str(path or self.bin_dir), JEV_BRAIN_USE_ARGV=str(self.log),
+                    HOME=self._temp.name, USERPROFILE=self._temp.name,
+                    PYTHONPATH=self._temp.name + os.pathsep + _env()["PYTHONPATH"])
 
     def test_dry_run_starts_nothing_and_names_the_caller(self):
         result = _run(
@@ -144,6 +152,7 @@ class UseCommandTests(unittest.TestCase):
             self.assertIn("refusing to pass --act", result.stderr)
             self.assertFalse(self.log.exists(), args)
 
+    @unittest.skipUnless(os.name == "posix", "fake macOS executor")
     def test_arm_starts_recorder_without_act(self):
         result = _run(
             ["use", "--arm", "--target", "Notes", "--request", "count the windows"],
@@ -159,15 +168,12 @@ class UseCommandTests(unittest.TestCase):
         self.assertTrue(body["started"])
         self.assertNotIn("model", body)
         self.assertNotIn("mock", result.stdout)
-        argv = self.log.read_text(encoding="utf-8").splitlines()
-        self.assertTrue(argv[0].endswith("jev-run"))
-        self.assertEqual(
-            argv[1:],
-            ["--expect", "Notes", "--target", "Notes", "--text", "count the windows"],
-        )
-        self.assertNotIn("--act", argv)
+        expected = ["count the windows", "--expect", "Notes", "--steps", "1", "--handoffs", "0"]
+        digest = hashlib.sha256(json.dumps(expected).encode()).hexdigest()
+        self.assertEqual(self.log.read_text(encoding="ascii"), digest)
         print("armed recorder argv has no --act; decision_maker is caller")
 
+    @unittest.skipUnless(os.name == "posix", "fake macOS executor")
     def test_arm_without_jev_run_starts_nothing(self):
         empty = Path(self._temp.name) / "empty"
         empty.mkdir()
@@ -180,19 +186,19 @@ class UseCommandTests(unittest.TestCase):
         self.assertEqual(result.stdout, "")
         self.assertFalse(self.log.exists())
 
-    def test_help_offers_arm_and_has_no_act_flag(self):
+    def test_help_offers_preview_and_opt_in_act(self):
         result = _run(["use", "--help"])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--arm", result.stdout)
         self.assertIn("--target", result.stdout)
-        self.assertNotRegex(result.stdout, r"(?m)^\s*--act\b")
+        self.assertIn("--act", result.stdout)
 
 
 class SurfaceListTests(unittest.TestCase):
     """Names ported from the jev fork's sensitive-surface gate, and ordinary targets that stay allowed."""
 
     def test_named_apps_sites_and_codes_are_refused(self):
-        from systemone.computer_use import sensitive_surface
+        from jev_brain.computer_use import sensitive_surface
 
         cases = {
             "banking": ("PayPal", "open Venmo", "Coinbase", "Wallet", "Wells Fargo"),
@@ -208,7 +214,7 @@ class SurfaceListTests(unittest.TestCase):
                     self.assertEqual(sensitive_surface("Safari", phrase), name)
 
     def test_ordinary_targets_are_allowed(self):
-        from systemone.computer_use import sensitive_surface
+        from jev_brain.computer_use import sensitive_surface
 
         for target, request in (("Notes", "count the windows"), ("Finder", "open the Downloads folder"),
                                 ("Calendar", "show next week"), ("System Settings", "turn on dark mode")):

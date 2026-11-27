@@ -1,20 +1,14 @@
 # Contributing
 
-This package is MIT. Copyright (c) 2026 Talal Kashar. See `LICENSE`.
+Keep the caller in charge of each sub-goal. The default installation uses the Python standard library. The optional macOS runner integrates with Aaron Levin’s upstream package.
 
-The caller decides a computer-use action. `systemone use` checks that choice, stays a dry run unless `--arm`, and never passes `--act`. jev is the hands layer. Do not make Jev the decision maker.
+Run these checks from the clone:
 
-- Run tests from this directory:
+```sh
+python -m unittest discover -s tests
+python -m compileall -q src runner tests
+```
 
-  ```bash
-  python3 -m unittest discover -s tests -v
-  python3 -m compileall -q src tests
-  ```
+Exercise the shipped CLI and MCP entry points. Use a temporary home, a fake foreground window, and a recording `jev-run` on an isolated `PATH` for act-mode tests. Tests must leave the desktop alone. Include regression coverage for changes to the gate or the executor. Keep credentials and user data out of fixtures and logs.
 
-  Tests import `tests/srcpath.py`, which puts `src/` on `sys.path`. `PYTHONPATH=src` is optional.
-
-- A test for `systemone use` must start `python -m systemone.cli`. An armed test may put a throwaway `jev-run` on `PATH` that only records its argv. Do not point that test at a real click.
-- Keep the default install free of third-party dependencies. Do not add PyTorch, Transformers, or model weights to `pyproject.toml`.
-- Do not commit secrets, `.env` files, private keys, tokens, student records, or mail.
-- Do not vendor other projects. Aaron Levin's typesafe-computer-use stays in its own repo. Decision-model weights stay under their own license.
-- New behavior needs a test. Bug fixes should fail before the fix and pass after it.
+The code is available under the [MIT license](LICENSE).
