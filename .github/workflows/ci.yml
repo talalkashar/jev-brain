@@ -55,7 +55,7 @@ jobs:
       - name: Compile package and optional runner
         run: python -m compileall -q src runner tests
       - name: test
-        run: python -m unittest discover -s tests
+        run: python tests/run_ci.py
 
   adapter:
     runs-on: macos-latest
@@ -75,4 +75,4 @@ jobs:
       - name: Lint and exercise the adapter with synthetic inputs
         run: |
           ruff check src runner tests
-          JEV_TEST_RUNNER_DIST="$RUNNER_TEMP/runner-dist" python -m unittest discover -s tests
+          JEV_TEST_RUNNER_DIST="$RUNNER_TEMP/runner-dist" python tests/run_ci.py
