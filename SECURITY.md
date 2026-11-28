@@ -8,7 +8,7 @@ SystemOne checks a computer-use handoff and can serve a local mock for closed qu
 - `--arm` is the explicit arm. It looks up `jev-run` on `PATH` and starts `jev-run --expect TARGET --target TARGET --text REQUEST`.
 - The argument list never includes `--act`.
 - A named target and a request are required. A target or request that is `--act`, or that starts with `-`, is refused.
-- The command refuses banking, mail, messages, password managers, Mason or student records, admin consoles, and login or MFA surfaces before it starts a process.
+- Before starting a runner, the command checks the target and request text for patterns associated with banking, mail, messages, password managers, Mason or student records, admin consoles and login or MFA.
 - The JSON field `decision_maker` is `caller`. This command does not call the mock engine.
 - If `jev-run` is missing, `--arm` exits 2 and starts nothing.
 - This command does not download model weights.
@@ -25,3 +25,7 @@ SystemOne checks a computer-use handoff and can serve a local mock for closed qu
 ## Install
 
 `systemone install` prints the Claude Code, Cursor, and Codex config and writes nothing. `--yes` writes only under the current home. It refuses a symlink, including a pre-existing `*.systemone-tmp` symlink, and any path outside that home.
+
+## Reporting
+
+For a security concern, request a private contact channel from the maintainer before sharing reproduction details. Keep real targets, secrets and private records out of public issues. The handoff checks the supplied text only. A passing plan cannot identify the foreground window or establish authorization.

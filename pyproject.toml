@@ -1,18 +1,19 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "systemone"
 version = "0.1.0"
-description = "Guarded computer-use handoff and closed-question wiring. The caller decides."
-readme = "README.md"
+description = "Preview agent desktop handoffs and test closed questions with a local mock."
+readme = {file = "RELEASE.md", content-type = "text/markdown"}
 requires-python = ">=3.11"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{name = "Talal Kashar"}]
 dependencies = []
+keywords = ["computer-use", "mcp", "cli", "dry-run", "agent-tools"]
 classifiers = [
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
@@ -22,9 +23,10 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/talalkashar/systemone"
-Repository = "https://github.com/talalkashar/systemone"
-Issues = "https://github.com/talalkashar/systemone/issues"
+Homepage = "https://github.com/talalkashar/jev-brain"
+Repository = "https://github.com/talalkashar/jev-brain"
+Issues = "https://github.com/talalkashar/jev-brain/issues"
+Changelog = "https://github.com/talalkashar/jev-brain/blob/main/CHANGELOG.md"
 
 [project.scripts]
 systemone = "systemone.cli:main"

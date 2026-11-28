@@ -1,0 +1,4 @@
+include README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md
+include tests/srcpath.py
+recursive-include examples *.py *.md *.json
+recursive-include docs *.md *.png
