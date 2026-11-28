@@ -1,0 +1,13 @@
+{
+  "state": "The build failed on main",
+  "questions": {
+    "route": {
+      "type": "choice",
+      "instructions": "Which queue should take this?",
+      "criteria": {
+        "ci": "Build, test, and deploy failures",
+        "product": "User-facing defects"
+      }
+    }
+  }
+}

@@ -5,7 +5,7 @@ description: Use when the user asked for a computer-use handoff, or for a closed
 
 # SystemOne
 
-You are the brain. Any agent can be that caller. You choose the target and the request. SystemOne checks that choice. jev is only the hands layer. Mock answers are fixed wiring, not a judgment. This package does not call a model vendor.
+You are the brain. Any agent can be that caller. You choose the target and the request. SystemOne checks that choice. The optional external runner receives a preview request. SystemOne never passes `--act`. Mock answers are fixed wiring, not a judgment. This package does not call a model vendor.
 
 ## Computer use
 
@@ -15,7 +15,7 @@ Prefer an API or a CLI when one exists. When the user asked to operate a named w
 systemone use --target "WINDOW" --request "ACTION"
 ```
 
-That command prints JSON and starts no process. `decision_maker` is `caller`. Pass `--arm` only when the user explicitly armed the action in this request:
+That command prints JSON and starts no process. `decision_maker` is `caller`. Pass `--arm` only when the user explicitly requested a preview with a trusted, compatible external runner:
 
 ```bash
 systemone use --arm --target "WINDOW" --request "ACTION"
@@ -40,6 +40,8 @@ Also refuse a target or request of `--act`, and any target or request that start
 `systemone install` prints the Claude Code, Cursor, and Codex config and writes nothing. `systemone install --yes` writes that config under the home directory. Read the printout before you pass `--yes`.
 
 ## Closed questions
+
+The stdio MCP server exposes only `health` and `decide`. Use the CLI for handoff previews.
 
 Use `decide` only for a question whose answers you already listed. The local server in this release is `systemone serve --mock`.
 

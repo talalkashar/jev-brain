@@ -18,3 +18,5 @@ The caller decides a computer-use action. `systemone use` checks that choice, st
 - Do not commit secrets, `.env` files, private keys, tokens, student records, or mail.
 - Do not vendor other projects. Aaron Levin's typesafe-computer-use stays in its own repo. Decision-model weights stay under their own license.
 - New behavior needs a test. Bug fixes should fail before the fix and pass after it.
+
+To reproduce the README terminal capture, run `python3 examples/preview.py` from the checkout. The image is the final frame of that command recorded with termtosvg (`42x6`, `window_frame`).
