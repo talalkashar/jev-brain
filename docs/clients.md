@@ -6,11 +6,15 @@ Install the CLI in a virtual environment as shown in the [README](../README.md#i
 .venv/bin/systemone serve --mock
 ```
 
+In Windows PowerShell, start the mock with `.\.venv\Scripts\systemone.exe serve --mock`.
+
 The client starts a separate stdio process, `systemone-mcp`. Its two tools call the mock at `http://127.0.0.1:18100`. Use the installed executable's **absolute path** so a client opened from the Dock can find it.
 
 ### Claude Code and Cursor
 
-From the checkout, paste this command into a second terminal. Copy the JSON it prints into your MCP configuration. Claude Code supports project-level `.mcp.json`; Cursor supports project-level `.cursor/mcp.json`. If the file already has servers, add just the `systemone` entry under `mcpServers`. Keep machine-specific paths out of shared configs.
+From the checkout, run the command for your shell in a second terminal. Copy the JSON it prints into your MCP configuration. Claude Code supports project-level `.mcp.json`; Cursor supports project-level `.cursor/mcp.json`. If the file already has servers, add just the `systemone` entry under `mcpServers`. Keep machine-specific paths out of shared configs.
+
+**macOS and Linux**
 
 ```sh
 .venv/bin/python -c 'import json, sysconfig
@@ -20,9 +24,23 @@ entry = {"type": "stdio", "command": str(exe), "args": []}
 print(json.dumps({"mcpServers": {"systemone": entry}}, indent=2))'
 ```
 
+**Windows PowerShell**
+
+```powershell
+@'
+import json, sysconfig
+from pathlib import Path
+exe = Path(sysconfig.get_path("scripts")) / "systemone-mcp.exe"
+entry = {"type": "stdio", "command": str(exe), "args": []}
+print(json.dumps({"mcpServers": {"systemone": entry}}, indent=2))
+'@ | .\.venv\Scripts\python.exe -
+```
+
 ### Codex
 
-From the checkout, paste this command into a terminal. Copy its output into your Codex `config.toml`. If a `[mcp_servers.systemone]` table exists, edit that table in place.
+From the checkout, run the command for your shell. Copy its output into your Codex `config.toml`. If a `[mcp_servers.systemone]` table exists, edit that table in place.
+
+**macOS and Linux**
 
 ```sh
 .venv/bin/python -c 'import json, sysconfig
@@ -33,7 +51,18 @@ print("command =", json.dumps(str(exe), ensure_ascii=False))
 print("args = []")'
 ```
 
-On Windows, use `.\.venv\Scripts\python.exe` and `systemone-mcp.exe` in these generators. Use `.\.venv\Scripts\systemone.exe serve --mock` to start the mock.
+**Windows PowerShell**
+
+```powershell
+@'
+import json, sysconfig
+from pathlib import Path
+exe = Path(sysconfig.get_path("scripts")) / "systemone-mcp.exe"
+print("[mcp_servers.systemone]")
+print("command =", json.dumps(str(exe), ensure_ascii=False))
+print("args = []")
+'@ | .\.venv\Scripts\python.exe -
+```
 
 ### Verify the connection
 
