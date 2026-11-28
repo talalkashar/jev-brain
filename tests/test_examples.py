@@ -19,7 +19,7 @@ class ExampleTests(unittest.TestCase):
     def test_windows_client_config_examples(self):
         guide = (ROOT / "docs" / "clients.md").read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory(prefix="client setup ") as directory:
-            checkout = Path(directory)
+            checkout = Path(directory).resolve()
             venv.EnvBuilder().create(checkout / ".venv")
             exe = str(checkout / ".venv" / "Scripts" / "systemone-mcp.exe")
             examples = [
